@@ -9,4 +9,3 @@ tenacity
 python-dotenv
 json-repair
 python-pptx
-playwright
