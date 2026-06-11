@@ -155,6 +155,69 @@ async def research(
     })
 
 
+@app.post("/design")
+async def design(
+    file: UploadFile = File(...),
+    instruction: str = Form(default="Create a professional presentation."),
+    language: str = Form(default="ko"),
+):
+    """[DeepPresenter] 슬라이드 원고 .md → Design 에이전트 → HTML 슬라이드 생성."""
+    from deeppresenter.agents.design import Design
+    from deeppresenter.agents.env import AgentEnv
+    from deeppresenter.utils.constants import WORKSPACE_BASE
+    from deeppresenter.utils.typings import InputRequest
+
+    if not file.filename or not file.filename.lower().endswith(".md"):
+        raise HTTPException(status_code=400, detail="Only .md files are accepted.")
+
+    raw = await file.read()
+    try:
+        md_content = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
+
+    session_id = str(uuid.uuid4())[:8]
+    workspace = WORKSPACE_BASE / session_id
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    manuscript_path = workspace / file.filename
+    manuscript_path.write_bytes(raw)
+
+    req = InputRequest(instruction=instruction, language=language)
+
+    logger.info("[Design] session=%s file=%s", session_id, file.filename)
+
+    config = _make_deep_config()
+    slides_dir = None
+    messages_log = []
+
+    try:
+        async with AgentEnv(workspace) as env:
+            agent = Design(config=config, agent_env=env, workspace=workspace, language=language)
+            async for item in agent.loop(req, markdown_file=str(manuscript_path)):
+                if isinstance(item, str):
+                    slides_dir = item
+                    break
+                else:
+                    messages_log.append({"role": item.role, "text": item.text[:200]})
+            agent.save_history()
+    except Exception as e:
+        logger.error("[Design] failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Design agent failed: {e}")
+
+    if slides_dir is None:
+        raise HTTPException(status_code=500, detail="Design agent did not produce a slides directory.")
+
+    html_files = sorted(Path(slides_dir).glob("slide_*.html"))
+    return JSONResponse(content={
+        "session_id": session_id,
+        "slides_dir": slides_dir,
+        "slide_count": len(html_files),
+        "slides": [str(f) for f in html_files],
+        "turns": len(messages_log),
+    })
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

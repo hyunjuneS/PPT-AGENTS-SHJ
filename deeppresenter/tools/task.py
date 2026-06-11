@@ -178,6 +178,77 @@ INSPECT_MANUSCRIPT_SPEC = {
 }
 
 
+# ── inspect_slide ─────────────────────────────────────────────────────────────
+
+def inspect_slide(
+    html_file: str,
+    aspect_ratio: str = "16:9",
+) -> str:
+    """
+    Validate an HTML slide file.
+    Checks existence, basic HTML structure, and fixed-size body declaration.
+    Returns a validation summary or raises AssertionError on failure.
+    """
+    path = Path(html_file)
+    assert path.exists() and path.suffix == ".html", \
+        f"Not a valid HTML file: {html_file}"
+
+    content = path.read_text(encoding="utf-8")
+    assert content.strip(), "HTML file is empty"
+    assert "<body" in content.lower(), "HTML file is missing <body> tag"
+
+    issues = []
+
+    SIZES = {
+        "16:9": ("1280", "720"),
+        "4:3":  ("960",  "720"),
+        "A1":   ("2244", "3178"),
+        "A2":   ("1587", "2244"),
+        "A3":   ("1122", "1587"),
+        "A4":   ("794",  "1123"),
+    }
+    if aspect_ratio in SIZES:
+        w, h = SIZES[aspect_ratio]
+        if w not in content or h not in content:
+            issues.append(f"Body may not have the correct fixed size ({w}x{h}px) for {aspect_ratio}.")
+
+    if "url(" in content and "http" in content:
+        issues.append("External image URL detected — images should be local paths.")
+
+    if issues:
+        return "Issues found:\n" + "\n".join(f"- {i}" for i in issues)
+
+    return f"Slide is valid. ({len(content)} chars, aspect_ratio={aspect_ratio})"
+
+
+INSPECT_SLIDE_SPEC = {
+    "type": "function",
+    "function": {
+        "name": "inspect_slide",
+        "description": (
+            "Validate an HTML slide file after generation. "
+            "Checks structure, fixed body size, and common issues. "
+            "Call this immediately after writing each slide HTML file."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "html_file": {
+                    "type": "string",
+                    "description": "Absolute path to the .html slide file.",
+                },
+                "aspect_ratio": {
+                    "type": "string",
+                    "enum": ["16:9", "4:3", "A1", "A2", "A3", "A4"],
+                    "description": "Slide aspect ratio. Default: 16:9",
+                },
+            },
+            "required": ["html_file"],
+        },
+    },
+}
+
+
 # ── registry ──────────────────────────────────────────────────────────────────
 
 ALL_TOOLS: dict[str, tuple[dict, object]] = {
@@ -186,4 +257,5 @@ ALL_TOOLS: dict[str, tuple[dict, object]] = {
     "write_file":         (WRITE_FILE_SPEC,         write_file),
     "execute_command":    (EXECUTE_COMMAND_SPEC,    execute_command),
     "inspect_manuscript": (INSPECT_MANUSCRIPT_SPEC, inspect_manuscript),
+    "inspect_slide":      (INSPECT_SLIDE_SPEC,      inspect_slide),
 }

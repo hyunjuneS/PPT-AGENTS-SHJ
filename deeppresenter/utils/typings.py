@@ -141,3 +141,7 @@ class InputRequest(BaseModel):
         if self.attachments:
             parts.append("Attachments: " + ", ".join(self.attachments))
         return "\n".join(parts)
+
+    @property
+    def designagent_prompt(self) -> str:
+        return self.instruction
