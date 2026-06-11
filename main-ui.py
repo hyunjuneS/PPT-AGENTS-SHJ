@@ -159,8 +159,12 @@ async def export_pptx(
     slides_dir: str = Form(...),
     aspect_ratio: str = Form(default="16:9"),
     filename: str = Form(default="slides.pptx"),
+    soft: bool = Form(default=True),
 ):
-    """HTML 슬라이드 폴더(slides_dir) → PPTX 파일 변환 후 다운로드."""
+    """HTML 슬라이드 폴더(slides_dir) → PPTX 파일 변환 후 다운로드.
+    soft=True(기본): 검증 경고는 로그로만 출력하고 PPTX 생성 계속.
+    soft=False: 검증 오류 발생 시 변환 중단.
+    """
     from deeppresenter.tools.export import html_slides_to_pptx
 
     slides_path = Path(slides_dir)
@@ -172,13 +176,14 @@ async def export_pptx(
         raise HTTPException(status_code=400, detail="No slide_*.html files found in slides_dir.")
 
     pptx_path = slides_path / filename
-    logger.info("[Export] %d slides → %s", len(html_files), pptx_path)
+    logger.info("[Export] %d slides → %s (soft=%s)", len(html_files), pptx_path, soft)
 
     try:
         await html_slides_to_pptx(
             slides_dir=str(slides_path),
             output_path=str(pptx_path),
             aspect_ratio=aspect_ratio,
+            soft=soft,
         )
     except Exception as e:
         logger.error("[Export] failed: %s", e)

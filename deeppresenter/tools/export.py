@@ -31,6 +31,7 @@ async def html_slides_to_pptx(
     slides_dir: str,
     output_path: str,
     aspect_ratio: str = "16:9",
+    soft: bool = True,
 ) -> str:
     """
     Convert slide_*.html files in slides_dir to a PPTX file using Node.js.
@@ -55,6 +56,8 @@ async def html_slides_to_pptx(
         "--output",   str(Path(output_path).resolve()),
         "--layout",   aspect_ratio,
     ]
+    if soft:
+        cmd.append("--soft")
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
