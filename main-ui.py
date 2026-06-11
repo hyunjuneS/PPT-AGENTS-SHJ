@@ -31,23 +31,30 @@ _llm = AsyncLLM(
     timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
 )
 
+# Design 에이전트 전용 모델 — DESIGN_MODEL_NAME이 없으면 기본 모델 사용
+_design_llm = AsyncLLM(
+    model=os.environ.get("DESIGN_MODEL_NAME") or os.environ.get("MODEL_NAME", "claude-opus-4-5"),
+    base_url=os.environ.get("OPENAI_BASE_URL") or None,
+    api_key=os.environ.get("OPENAI_API_KEY", ""),
+    timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
+)
+
 LLM_MAPPING: dict[str, AsyncLLM] = {"language": _llm}
 
-logger.info("LLM configured: %s", _llm)
+logger.info("LLM configured: research=%s  design=%s", _llm, _design_llm)
 
 
 def _make_deep_config():
     """DeepPresenterConfig을 현재 _llm 설정으로 생성."""
     from deeppresenter.utils.config import DeepPresenterConfig, LLM
-    deep_llm = LLM(
-        model=_llm.model,
-        base_url=_llm.base_url,
-        api_key=_llm.api_key,
-    )
+
+    def _to_deep_llm(llm: AsyncLLM) -> LLM:
+        return LLM(model=llm.model, base_url=llm.base_url, api_key=llm.api_key)
+
     return DeepPresenterConfig(
-        research_agent=deep_llm,
-        design_agent=deep_llm,
-        long_context_model=deep_llm,
+        research_agent=_to_deep_llm(_llm),
+        design_agent=_to_deep_llm(_design_llm),
+        long_context_model=_to_deep_llm(_llm),
     )
 
 
@@ -279,6 +286,8 @@ def parse_args() -> argparse.Namespace:
                         help="Uvicorn log level (default: info)")
     parser.add_argument("--heavy-reflect", action="store_true", default=False,
                         help="Enable visual VLM inspection: render each slide and send image to Design agent (requires multimodal model)")
+    parser.add_argument("--design-model", default=None,
+                        help="VLM model for Design agent (use with --heavy-reflect). Defaults to --model if not set.")
     return parser.parse_args()
 
 
@@ -292,8 +301,10 @@ if __name__ == "__main__":
         os.environ["OPENAI_BASE_URL"] = args.llmurl
     if args.heavy_reflect:
         os.environ["DEEPPRESENTER_HEAVY_REFLECT"] = "1"
+    if args.design_model:
+        os.environ["DESIGN_MODEL_NAME"] = args.design_model
 
-    logger.info("LLM  : model=%s url=%s", args.model, args.llmurl)
+    logger.info("LLM  : model=%s  design_model=%s  url=%s", args.model, args.design_model or args.model, args.llmurl)
     logger.info("Server: host=%s port=%d reload=%s log_level=%s",
                 args.host, args.port, args.reload, args.log_level)
 
