@@ -56,6 +56,7 @@ class AsyncLLM:
 
         system, message = self.format_message(content, images, system_message)
 
+        logger.info("→ LLM 호출 시작 (model=%s, base_url=%s)", self.model, self.base_url)
         try:
             completion = await self.client.chat.completions.create(
                 model=self.model,
@@ -63,8 +64,9 @@ class AsyncLLM:
                 **client_kwargs,
             )
         except Exception as e:
-            logger.error("LLM call failed (model=%s): %s", self.model, e)
+            logger.error("✗ LLM 호출 실패 (model=%s): %s", self.model, e)
             raise
+        logger.info("← LLM 응답 수신 완료")
 
         response = completion.choices[0].message.content
         message.append({"role": "assistant", "content": response})
