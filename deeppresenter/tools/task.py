@@ -278,10 +278,6 @@ def inspect_slide(
     bare_text_issues = _check_bare_text(content)
     issues.extend(bare_text_issues)
 
-    # 세로 오버플로우 검사: top+height 합산이 body 높이를 초과하는 요소 탐지
-    overflow_issues = _check_overflow(content, aspect_ratio)
-    issues.extend(overflow_issues)
-
     if issues:
         return "Issues found:\n" + "\n".join(f"- {i}" for i in issues)
 
@@ -336,58 +332,6 @@ def _check_bare_text(html: str) -> list[str]:
     except Exception:
         pass
     return checker.found
-
-
-def _check_overflow(html: str, aspect_ratio: str) -> list[str]:
-    """
-    인라인 style의 top+height 합산이 body 높이를 초과하는지 탐지한다.
-    렌더링 없이 CSS 수치 분석만으로 세로 오버플로우를 감지하는 heuristic 검사.
-    """
-    SIZES = {
-        "16:9": (1280, 720),
-        "4:3":  (960,  720),
-        "A1":   (2244, 3178),
-        "A2":   (1587, 2244),
-        "A3":   (1122, 1587),
-        "A4":   (794,  1123),
-    }
-    if aspect_ratio not in SIZES:
-        return []
-
-    _, body_h = SIZES[aspect_ratio]
-    MARGIN_PX = 48  # 0.5인치 ≈ 48px (96dpi 기준)
-
-    def to_px(val: float, unit: str) -> float:
-        if unit == "pt":
-            return val * 96 / 72  # 1pt = 1.333...px
-        if unit == "%":
-            return val / 100 * body_h
-        return val  # px
-
-    issues = []
-    seen: set[float] = set()
-
-    for style in re.findall(r'style\s*=\s*["\']([^"\']*)["\']', html, re.IGNORECASE):
-        top_m = re.search(r'\btop\s*:\s*([\d.]+)\s*(px|pt|%)', style, re.IGNORECASE)
-        h_m   = re.search(r'\bheight\s*:\s*([\d.]+)\s*(px|pt|%)', style, re.IGNORECASE)
-        if not (top_m and h_m):
-            continue
-
-        top_px    = to_px(float(top_m.group(1)), top_m.group(2).lower())
-        height_px = to_px(float(h_m.group(1)),   h_m.group(2).lower())
-        bottom_px = top_px + height_px
-
-        if bottom_px > body_h:
-            overflow_pt = (bottom_px - body_h) * 72 / 96
-            key = round(overflow_pt, 1)
-            if key not in seen:
-                seen.add(key)
-                issues.append(
-                    f"Content overflows body by {overflow_pt:.1f}pt vertically. "
-                    f"Reduce element height or top offset — leave at least 0.5\" ({MARGIN_PX}px) margin at the bottom of the slide."
-                )
-
-    return issues
 
 
 INSPECT_SLIDE_SPEC = {
