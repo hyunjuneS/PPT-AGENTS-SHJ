@@ -1,9 +1,10 @@
 import base64
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
+import httpx
 from openai import AsyncOpenAI
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,7 @@ def tenacity_decorator(func):
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         reraise=True,
+        retry=retry_if_not_exception_type(httpx.ReadTimeout),  # timeout은 재시도 안 함
     )(func)
 
 

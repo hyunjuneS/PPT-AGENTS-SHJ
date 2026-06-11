@@ -26,7 +26,7 @@ _llm = AsyncLLM(
     model=os.environ.get("MODEL_NAME", "claude-opus-4-5"),
     base_url=os.environ.get("OPENAI_BASE_URL") or None,
     api_key=os.environ.get("OPENAI_API_KEY", ""),
-    timeout=int(os.environ.get("LLM_TIMEOUT", "60")),
+    timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
 )
 
 LLM_MAPPING: dict[str, AsyncLLM] = {"language": _llm}
@@ -81,7 +81,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--apikey",  required=True, help="LLM API key")
     parser.add_argument("--llmurl",  default=None,  help="LLM base URL (OpenAI-compatible)")
     parser.add_argument("--model",   default="claude-opus-4-5", help="Model name (default: claude-opus-4-5)")
-    parser.add_argument("--timeout", type=int, default=60, help="LLM request timeout in seconds (default: 60)")
+    parser.add_argument("--timeout", type=int, default=120, help="LLM request timeout in seconds (default: 120)")
     # Server
     parser.add_argument("--host",      default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
     parser.add_argument("--port",      type=int, default=5000, help="Bind port (default: 5000)")
