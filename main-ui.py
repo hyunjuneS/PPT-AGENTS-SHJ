@@ -59,7 +59,7 @@ async def analyze_markdown(file: UploadFile = File(...)):
 
     logger.info("Analyzing file: %s (%d chars)", file.filename, len(markdown_text))
 
-    agent = Agent(name="md_analyzer", llm_mapping=LLM_MAPPING)
+    agent = Agent(name="doc_extractor", llm_mapping=LLM_MAPPING)
 
     try:
         turn_id, result = await agent(markdown_document=markdown_text)
