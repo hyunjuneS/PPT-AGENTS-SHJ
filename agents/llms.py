@@ -28,11 +28,17 @@ class AsyncLLM:
     timeout: int = 360
 
     def __post_init__(self):
-        self.client = AsyncOpenAI(
-            base_url=self.base_url,
-            api_key=self.api_key,
-            timeout=self.timeout,
-        )
+        self._client: AsyncOpenAI | None = None
+
+    @property
+    def client(self) -> AsyncOpenAI:
+        if self._client is None:
+            self._client = AsyncOpenAI(
+                base_url=self.base_url,
+                api_key=self.api_key,
+                timeout=self.timeout,
+            )
+        return self._client
 
     @tenacity_decorator
     async def __call__(
