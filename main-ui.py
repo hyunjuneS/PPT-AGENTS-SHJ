@@ -1,9 +1,11 @@
 import argparse
 import logging
 import os
+import uuid
+from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 from agents.agent import Agent
@@ -15,7 +17,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="PPT Agent API", version="0.1.0")
+app = FastAPI(title="PPT Agent API", version="0.2.0")
 
 # ---------------------------------------------------------------------------
 # LLM — 환경변수에서 읽음.
@@ -34,6 +36,21 @@ LLM_MAPPING: dict[str, AsyncLLM] = {"language": _llm}
 logger.info("LLM configured: %s", _llm)
 
 
+def _make_deep_config():
+    """DeepPresenterConfig을 현재 _llm 설정으로 생성."""
+    from deeppresenter.utils.config import DeepPresenterConfig, LLM
+    deep_llm = LLM(
+        model=_llm.model,
+        base_url=_llm.base_url,
+        api_key=_llm.api_key,
+    )
+    return DeepPresenterConfig(
+        research_agent=deep_llm,
+        design_agent=deep_llm,
+        long_context_model=deep_llm,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -45,7 +62,7 @@ async def health():
 
 @app.post("/analyze")
 async def analyze_markdown(file: UploadFile = File(...)):
-    """Receive a .md file and return a structured analysis as JSON."""
+    """[pptagent] .md 파일을 doc_extractor 에이전트로 분석해 JSON 반환."""
     if not file.filename or not file.filename.lower().endswith(".md"):
         raise HTTPException(status_code=400, detail="Only .md files are accepted.")
 
@@ -59,7 +76,6 @@ async def analyze_markdown(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
     logger.info("Analyzing file: %s (%d chars)", file.filename, len(markdown_text))
-
     agent = Agent(name="doc_extractor", llm_mapping=LLM_MAPPING)
 
     try:
@@ -69,6 +85,74 @@ async def analyze_markdown(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Agent failed: {e}")
 
     return JSONResponse(content={"turn_id": turn_id, "result": result})
+
+
+@app.post("/research")
+async def research(
+    file: UploadFile = File(...),
+    instruction: str = Form(...),
+    language: str = Form(default="en"),
+):
+    """[DeepPresenter] .md 파일 + instruction → Research 에이전트로 슬라이드 원고 생성."""
+    from deeppresenter.agents.env import AgentEnv
+    from deeppresenter.agents.research import Research
+    from deeppresenter.utils.constants import WORKSPACE_BASE
+    from deeppresenter.utils.typings import InputRequest
+
+    if not file.filename or not file.filename.lower().endswith(".md"):
+        raise HTTPException(status_code=400, detail="Only .md files are accepted.")
+
+    raw = await file.read()
+    try:
+        md_content = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
+
+    # 세션별 workspace 생성
+    session_id = str(uuid.uuid4())[:8]
+    workspace = WORKSPACE_BASE / session_id
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    # 업로드 파일 저장
+    attachment_path = workspace / file.filename
+    attachment_path.write_bytes(raw)
+
+    req = InputRequest(
+        instruction=instruction,
+        attachments=[str(attachment_path)],
+        language=language,
+    )
+
+    logger.info("[Research] session=%s instruction=%r", session_id, instruction[:80])
+
+    config = _make_deep_config()
+    manuscript_path = None
+    messages_log = []
+
+    try:
+        async with AgentEnv(workspace) as env:
+            agent = Research(config=config, agent_env=env, workspace=workspace, language=language)
+            async for item in agent.loop(req):
+                if isinstance(item, str):
+                    manuscript_path = item
+                    break
+                else:
+                    messages_log.append({"role": item.role, "text": item.text[:200]})
+            agent.save_history()
+    except Exception as e:
+        logger.error("[Research] failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Research agent failed: {e}")
+
+    if manuscript_path is None:
+        raise HTTPException(status_code=500, detail="Research agent did not produce a manuscript.")
+
+    manuscript_content = Path(manuscript_path).read_text(encoding="utf-8")
+    return JSONResponse(content={
+        "session_id": session_id,
+        "manuscript_path": manuscript_path,
+        "manuscript": manuscript_content,
+        "turns": len(messages_log),
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -95,8 +179,6 @@ def parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
     args = parse_args()
 
-    # args 값을 환경변수로 먼저 설정 → uvicorn worker가 모듈을 re-import할 때
-    # 위의 os.environ.get() 호출이 올바른 값을 읽어간다.
     os.environ["OPENAI_API_KEY"]  = args.apikey
     os.environ["MODEL_NAME"]      = args.model
     os.environ["LLM_TIMEOUT"]     = str(args.timeout)
