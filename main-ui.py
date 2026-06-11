@@ -1,3 +1,4 @@
+import argparse
 import logging
 import os
 
@@ -71,11 +72,25 @@ async def analyze_markdown(file: UploadFile = File(...)):
 # Entry point
 # ---------------------------------------------------------------------------
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="PPT Agent FastAPI server")
+    parser.add_argument("--host", default=os.environ.get("HOST", "0.0.0.0"), help="Bind host (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8000)), help="Bind port (default: 8000)")
+    parser.add_argument("--reload", action=argparse.BooleanOptionalAction, default=True, help="Enable auto-reload (default: on)")
+    parser.add_argument("--log-level", default=os.environ.get("LOG_LEVEL", "debug"),
+                        choices=["debug", "info", "warning", "error", "critical"],
+                        help="Uvicorn log level (default: debug)")
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = parse_args()
+    logger.info("Starting server — host=%s port=%d reload=%s log_level=%s",
+                args.host, args.port, args.reload, args.log_level)
     uvicorn.run(
         "main-ui:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="debug",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        log_level=args.log_level,
     )
