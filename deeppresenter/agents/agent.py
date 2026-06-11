@@ -178,6 +178,20 @@ class Agent:
                 f"{self.name} exceeded max turns: {self.turn_count - 1}/{self.max_turns}"
             )
 
+        # WSL: inject "turns running out" warning so the agent wraps up in time
+        if (
+            self.max_turns is not None
+            and self.max_turns - self.turn_count < 2
+            and self.chat_history
+        ):
+            self.chat_history[-1].content.append({
+                "type": "text",
+                "text": (
+                    f"You have only {self.max_turns - self.turn_count} turn(s) left. "
+                    "Finish the remaining work and call `finalize` immediately."
+                ),
+            })
+
         if len(self.chat_history) == 1:
             self.chat_history.append(
                 ChatMessage(role=Role.USER, content=self.prompt.render(**chat_kwargs))
