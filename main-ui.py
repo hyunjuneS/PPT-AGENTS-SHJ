@@ -285,14 +285,19 @@ def parse_args() -> argparse.Namespace:
                         choices=["debug", "info", "warning", "error", "critical"],
                         help="Uvicorn log level (default: info)")
     parser.add_argument("--heavy-reflect", action="store_true", default=False,
-                        help="Enable visual VLM inspection: render each slide and send image to Design agent (requires multimodal model)")
-    parser.add_argument("--design-model", default=None,
-                        help="VLM model for Design agent (use with --heavy-reflect). Defaults to --model if not set.")
+                        help="Enable visual VLM inspection: render each slide and send image to Design agent (requires --vlm-model)")
+    parser.add_argument("--vlm-model", default=None,
+                        help="Multimodal model for Design agent visual inspection (required when --heavy-reflect is set).")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
+
+    if args.heavy_reflect and not args.vlm_model:
+        import sys
+        print("error: --vlm-model is required when --heavy-reflect is set", file=sys.stderr)
+        sys.exit(1)
 
     os.environ["OPENAI_API_KEY"]  = args.apikey
     os.environ["MODEL_NAME"]      = args.model
@@ -301,10 +306,10 @@ if __name__ == "__main__":
         os.environ["OPENAI_BASE_URL"] = args.llmurl
     if args.heavy_reflect:
         os.environ["DEEPPRESENTER_HEAVY_REFLECT"] = "1"
-    if args.design_model:
-        os.environ["DESIGN_MODEL_NAME"] = args.design_model
+    if args.vlm_model:
+        os.environ["DESIGN_MODEL_NAME"] = args.vlm_model
 
-    logger.info("LLM  : model=%s  design_model=%s  url=%s", args.model, args.design_model or args.model, args.llmurl)
+    logger.info("LLM  : model=%s  vlm_model=%s  url=%s", args.model, args.vlm_model or "(none)", args.llmurl)
     logger.info("Server: host=%s port=%d reload=%s log_level=%s",
                 args.host, args.port, args.reload, args.log_level)
 
