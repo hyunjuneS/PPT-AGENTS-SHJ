@@ -43,16 +43,6 @@ def _find_binary(base: Path) -> str | None:
     return None
 
 
-def _check_node_modules() -> None:
-    node_modules = _SCRIPT_DIR / "node_modules"
-    if not node_modules.exists():
-        raise RuntimeError(
-            f"Node.js dependencies not installed. Run:\n"
-            f"  cd {_SCRIPT_DIR} && npm install\n"
-            f"Or for offline: bash {_SCRIPT_DIR}/install_offline.sh"
-        )
-
-
 async def html_slides_to_pptx(
     slides_dir: str,
     output_path: str,
@@ -64,8 +54,6 @@ async def html_slides_to_pptx(
     """
     if not _CLI_JS.exists():
         raise FileNotFoundError(f"html2pptx_cli.js not found at {_CLI_JS}")
-
-    _check_node_modules()
 
     slides_path = Path(slides_dir)
     html_files = sorted(slides_path.glob("slide_*.html"))
