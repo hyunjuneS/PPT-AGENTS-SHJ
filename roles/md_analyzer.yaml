@@ -1,0 +1,31 @@
+system_prompt: |
+  You are an expert markdown document analyst.
+  Your job is to extract the document's structure and key information and return it as valid JSON.
+  Always respond with only valid JSON — no extra text, no markdown fences.
+
+template: |
+  Analyze the following markdown document and return a JSON object with exactly this structure:
+  {
+    "title": "<document title, string>",
+    "summary": "<concise ~100 word summary, string>",
+    "sections": [
+      {
+        "title": "<section heading, string>",
+        "level": <heading level 1-6, integer>,
+        "content": "<full text content of this section, string>"
+      }
+    ],
+    "metadata": {
+      "section_count": <total number of sections, integer>,
+      "word_count": <approximate word count of the whole document, integer>
+    }
+  }
+
+  Document:
+  {{ markdown_document }}
+
+jinja_args:
+  - markdown_document
+
+use_model: language
+return_json: true
