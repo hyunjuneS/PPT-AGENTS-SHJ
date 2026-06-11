@@ -77,10 +77,15 @@ async def analyze_markdown(file: UploadFile = File(...)):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="PPT Agent FastAPI server")
-    parser.add_argument("--host", default=os.environ.get("HOST", "0.0.0.0"), help="Bind host (default: 0.0.0.0)")
-    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8000)), help="Bind port (default: 8000)")
-    parser.add_argument("--reload", action=argparse.BooleanOptionalAction, default=True, help="Enable auto-reload (default: on)")
-    parser.add_argument("--log-level", default=os.environ.get("LOG_LEVEL", "debug"),
+    # LLM
+    parser.add_argument("--apikey",  required=True, help="LLM API key")
+    parser.add_argument("--llmurl",  default=None,  help="LLM base URL (OpenAI-compatible)")
+    parser.add_argument("--model",   default="claude-opus-4-5", help="Model name (default: claude-opus-4-5)")
+    # Server
+    parser.add_argument("--host",      default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
+    parser.add_argument("--port",      type=int, default=8000, help="Bind port (default: 8000)")
+    parser.add_argument("--reload",    action=argparse.BooleanOptionalAction, default=True, help="Auto-reload (default: on)")
+    parser.add_argument("--log-level", default="debug",
                         choices=["debug", "info", "warning", "error", "critical"],
                         help="Uvicorn log level (default: debug)")
     return parser.parse_args()
@@ -88,8 +93,16 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = parse_args()
-    logger.info("Starting server — host=%s port=%d reload=%s log_level=%s",
+
+    _llm.api_key  = args.apikey
+    _llm.base_url = args.llmurl
+    _llm.model    = args.model
+    _llm.__post_init__()  # 변경된 값으로 AsyncOpenAI 클라이언트 재생성
+
+    logger.info("LLM  : model=%s url=%s", _llm.model, _llm.base_url)
+    logger.info("Server: host=%s port=%d reload=%s log_level=%s",
                 args.host, args.port, args.reload, args.log_level)
+
     uvicorn.run(
         "main-ui:app",
         host=args.host,
