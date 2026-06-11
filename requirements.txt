@@ -6,3 +6,4 @@ pydantic
 pyyaml
 python-multipart
 tenacity
+python-dotenv

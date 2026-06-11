@@ -3,6 +3,9 @@ import logging
 import os
 
 import uvicorn
+from dotenv import load_dotenv
+
+load_dotenv()  # .env 파일이 있으면 자동으로 환경변수로 로드
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
