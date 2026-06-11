@@ -154,6 +154,43 @@ async def research(
     )
 
 
+@app.post("/export")
+async def export_pptx(
+    slides_dir: str = Form(...),
+    aspect_ratio: str = Form(default="16:9"),
+    filename: str = Form(default="slides.pptx"),
+):
+    """HTML 슬라이드 폴더(slides_dir) → PPTX 파일 변환 후 다운로드."""
+    from deeppresenter.tools.export import html_slides_to_pptx
+
+    slides_path = Path(slides_dir)
+    if not slides_path.exists() or not slides_path.is_dir():
+        raise HTTPException(status_code=400, detail=f"slides_dir not found: {slides_dir}")
+
+    html_files = sorted(slides_path.glob("slide_*.html"))
+    if not html_files:
+        raise HTTPException(status_code=400, detail="No slide_*.html files found in slides_dir.")
+
+    pptx_path = slides_path / filename
+    logger.info("[Export] %d slides → %s", len(html_files), pptx_path)
+
+    try:
+        await html_slides_to_pptx(
+            slides_dir=str(slides_path),
+            output_path=str(pptx_path),
+            aspect_ratio=aspect_ratio,
+        )
+    except Exception as e:
+        logger.error("[Export] failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Export failed: {e}")
+
+    return FileResponse(
+        path=str(pptx_path),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=filename,
+    )
+
+
 @app.post("/design")
 async def design(
     file: UploadFile = File(...),
