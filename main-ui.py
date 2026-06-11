@@ -83,7 +83,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model",   default="claude-opus-4-5", help="Model name (default: claude-opus-4-5)")
     # Server
     parser.add_argument("--host",      default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
-    parser.add_argument("--port",      type=int, default=8000, help="Bind port (default: 8000)")
+    parser.add_argument("--port",      type=int, default=5000, help="Bind port (default: 5000)")
     parser.add_argument("--reload",    action=argparse.BooleanOptionalAction, default=True, help="Auto-reload (default: on)")
     parser.add_argument("--log-level", default="debug",
                         choices=["debug", "info", "warning", "error", "critical"],
