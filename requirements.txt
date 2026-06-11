@@ -6,3 +6,6 @@ pydantic
 pyyaml
 python-multipart
 tenacity
+python-dotenv
+json-repair
+Pillow

@@ -1,9 +1,10 @@
 import base64
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
+import httpx
 from openai import AsyncOpenAI
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,7 @@ def tenacity_decorator(func):
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         reraise=True,
+        retry=retry_if_not_exception_type(httpx.ReadTimeout),  # timeout은 재시도 안 함
     )(func)
 
 
@@ -28,11 +30,17 @@ class AsyncLLM:
     timeout: int = 360
 
     def __post_init__(self):
-        self.client = AsyncOpenAI(
-            base_url=self.base_url,
-            api_key=self.api_key,
-            timeout=self.timeout,
-        )
+        self._client: AsyncOpenAI | None = None
+
+    @property
+    def client(self) -> AsyncOpenAI:
+        if self._client is None:
+            self._client = AsyncOpenAI(
+                base_url=self.base_url,
+                api_key=self.api_key,
+                timeout=self.timeout,
+            )
+        return self._client
 
     @tenacity_decorator
     async def __call__(
@@ -50,6 +58,7 @@ class AsyncLLM:
 
         system, message = self.format_message(content, images, system_message)
 
+        logger.info("→ LLM 호출 시작 (model=%s, base_url=%s)", self.model, self.base_url)
         try:
             completion = await self.client.chat.completions.create(
                 model=self.model,
@@ -57,8 +66,9 @@ class AsyncLLM:
                 **client_kwargs,
             )
         except Exception as e:
-            logger.error("LLM call failed (model=%s): %s", self.model, e)
+            logger.error("✗ LLM 호출 실패 (model=%s): %s", self.model, e)
             raise
+        logger.info("← LLM 응답 수신 완료")
 
         response = completion.choices[0].message.content
         message.append({"role": "assistant", "content": response})

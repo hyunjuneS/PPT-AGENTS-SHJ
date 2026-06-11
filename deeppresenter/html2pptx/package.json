@@ -1,0 +1,17 @@
+{
+  "name": "html2pptx",
+  "version": "1.0.0",
+  "description": "HTML slide → PPTX converter (Playwright screenshot + PptxGenJS)",
+  "main": "html2pptx_cli.js",
+  "type": "commonjs",
+  "scripts": {
+    "install-offline": "npm install --prefer-offline --no-audit --no-fund"
+  },
+  "dependencies": {
+    "fast-glob": "^3.3.3",
+    "minimist": "^1.2.8",
+    "playwright": "^1.60.0",
+    "pptxgenjs": "^4.0.1",
+    "sharp": "^0.34.5"
+  }
+}
