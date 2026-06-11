@@ -215,10 +215,65 @@ def inspect_slide(
     if "url(" in content and "http" in content:
         issues.append("External image URL detected — images should be local paths.")
 
+    # bare text 검사: <div>, <section> 등 블록 요소 안에 <p>/<h1~6>/<li>/<span> 없이
+    # 직접 텍스트가 들어간 경우를 찾음 (html2pptx.js 변환 시 해당 텍스트 누락됨)
+    bare_text_issues = _check_bare_text(content)
+    issues.extend(bare_text_issues)
+
     if issues:
         return "Issues found:\n" + "\n".join(f"- {i}" for i in issues)
 
     return f"Slide is valid. ({len(content)} chars, aspect_ratio={aspect_ratio})"
+
+
+def _check_bare_text(html: str) -> list[str]:
+    """
+    Block 요소(<div> 등) 안에 텍스트가 <p>/<h1~6>/<li>/<span> 없이
+    직접 존재하는 경우를 탐지한다.
+    html2pptx.js는 이런 텍스트를 PPTX에 포함하지 않으므로 반드시 수정이 필요하다.
+    """
+    from html.parser import HTMLParser
+
+    BLOCK_TAGS  = {"div", "section", "header", "footer", "article", "aside", "main", "nav"}
+    INLINE_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "span",
+                   "a", "strong", "em", "b", "i", "small", "mark", "code"}
+
+    class _Checker(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self._stack: list[str] = []
+            self.found: list[str] = []
+
+        def handle_starttag(self, tag, attrs):
+            self._stack.append(tag.lower())
+
+        def handle_endtag(self, tag):
+            t = tag.lower()
+            for i in range(len(self._stack) - 1, -1, -1):
+                if self._stack[i] == t:
+                    self._stack.pop(i)
+                    break
+
+        def handle_data(self, data):
+            text = data.strip()
+            if not text:
+                return
+            if not self._stack:
+                return
+            parent = self._stack[-1]
+            if parent in BLOCK_TAGS:
+                preview = text[:30] + ("…" if len(text) > 30 else "")
+                self.found.append(
+                    f'<{parent.upper()}> contains unwrapped text "{preview}" — '
+                    f'wrap it in <p> or <span> so it appears in PowerPoint.'
+                )
+
+    checker = _Checker()
+    try:
+        checker.feed(html)
+    except Exception:
+        pass
+    return checker.found
 
 
 INSPECT_SLIDE_SPEC = {
