@@ -93,3 +93,4 @@ toolset:
   exclude_tool_servers: []
   exclude_tools:
     - inspect_manuscript
+    - execute_command

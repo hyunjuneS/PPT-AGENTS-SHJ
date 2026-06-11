@@ -1,6 +1,7 @@
 """Local tool implementations for the DeepPresenter agents."""
 
 import asyncio
+import math
 import re
 import shutil
 import subprocess
@@ -13,7 +14,8 @@ from deeppresenter.utils.log import debug, warning
 # ── finalize ──────────────────────────────────────────────────────────────────
 
 def _rewrite_image_links(path: Path) -> None:
-    """Research 결과물의 이미지 경로를 절대 경로로 재작성 (WSL 동일)."""
+    """Research 결과물의 이미지 경로를 절대 경로로 재작성하고
+    alt 텍스트에 이미지 비율을 주입 (WSL task.py 완전 동일)."""
     md_dir = path.parent
     content = path.read_text(encoding="utf-8")
 
@@ -32,7 +34,22 @@ def _rewrite_image_links(path: Path) -> None:
             p = md_dir / local_path
         if not p.exists():
             return match.group(0)
-        return f"![{alt_text}]({p.resolve().as_posix()}{rest})"
+
+        # 이미지 크기로 비율 계산 → alt에 주입 (Design 에이전트 레이아웃 힌트)
+        updated_alt = alt_text
+        try:
+            from PIL import Image as _Image
+            with _Image.open(p) as img:
+                width, height = img.size
+            if width > 0 and height > 0 and not re.search(r"\b\d+:\d+\b", updated_alt):
+                factor = math.gcd(width, height)
+                ratio = f"{width // factor}:{height // factor}"
+                updated_alt = f"{updated_alt}, {ratio}" if updated_alt else ratio
+        except Exception as e:
+            warning(f"Failed to get image size for {p}: {e}")
+
+        new_path = p.resolve().as_posix()
+        return f"![{updated_alt}]({new_path}{rest})"
 
     try:
         rewritten = re.sub(r"!\[(.*?)\]\((.*?)\)", _replace, content)
