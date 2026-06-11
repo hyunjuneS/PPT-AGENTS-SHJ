@@ -54,6 +54,7 @@ async def html_slides_to_pptx(
         "--html_dir", str(slides_path.resolve()),
         "--output",   str(Path(output_path).resolve()),
         "--layout",   aspect_ratio,
+        "--soft",
     ]
 
     proc = await asyncio.create_subprocess_exec(
