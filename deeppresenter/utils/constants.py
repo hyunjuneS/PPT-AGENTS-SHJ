@@ -7,6 +7,7 @@ PACKAGE_DIR = Path(__file__).parent.parent
 
 LOGGING_LEVEL = int(os.getenv("DEEPPRESENTER_LOG_LEVEL", logging.INFO))
 MAX_LOGGING_LENGTH = int(os.getenv("DEEPPRESENTER_MAX_LOGGING_LENGTH", 1024))
+HEAVY_REFLECT = os.getenv("DEEPPRESENTER_HEAVY_REFLECT", "").lower() in ("1", "true", "yes")
 
 RETRY_TIMES = int(os.getenv("RETRY_TIMES", 3))
 MAX_TOOLCALL_PER_TURN = int(os.getenv("MAX_TOOLCALL_PER_TURN", 7))

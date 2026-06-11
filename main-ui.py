@@ -277,6 +277,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-level", default="debug",
                         choices=["debug", "info", "warning", "error", "critical"],
                         help="Uvicorn log level (default: debug)")
+    parser.add_argument("--heavy-reflect", action="store_true", default=False,
+                        help="Enable visual VLM inspection: render each slide and send image to Design agent (requires multimodal model)")
     return parser.parse_args()
 
 
@@ -288,6 +290,8 @@ if __name__ == "__main__":
     os.environ["LLM_TIMEOUT"]     = str(args.timeout)
     if args.llmurl:
         os.environ["OPENAI_BASE_URL"] = args.llmurl
+    if args.heavy_reflect:
+        os.environ["DEEPPRESENTER_HEAVY_REFLECT"] = "1"
 
     logger.info("LLM  : model=%s url=%s", args.model, args.llmurl)
     logger.info("Server: host=%s port=%d reload=%s log_level=%s",

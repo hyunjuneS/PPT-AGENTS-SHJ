@@ -72,6 +72,14 @@ class AgentEnv:
                 loop = asyncio.get_event_loop()
                 result = await loop.run_in_executor(None, lambda: func(**args))
 
+            # tool이 content block list를 반환하면 그대로 보존 (이미지 포함 가능)
+            if isinstance(result, list):
+                return ChatMessage(
+                    role=Role.TOOL,
+                    content=result,
+                    tool_call_id=tool_call.id,
+                )
+
             result_str = str(result)
             if len(result_str) > self.cutoff_len:
                 result_str = result_str[:self.cutoff_len] + "\n... (truncated)"

@@ -64,9 +64,9 @@ class ChatMessage(BaseModel):
         d: dict[str, Any] = {"role": self.role.value}
 
         if self.role == Role.TOOL:
-            # tool result: content must be a string
             d["tool_call_id"] = self.tool_call_id
-            d["content"] = self.text
+            # 이미지가 포함된 경우 content list 그대로 전달 (VLM 시각 검사용)
+            d["content"] = self.content if self.has_image else self.text
             return d
 
         # content

@@ -1,14 +1,77 @@
 """Local tool implementations for the DeepPresenter agents."""
 
 import asyncio
+import base64
 import math
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
-from deeppresenter.utils.constants import TOOL_CUTOFF_LEN
+from deeppresenter.utils.constants import HEAVY_REFLECT, TOOL_CUTOFF_LEN
 from deeppresenter.utils.log import debug, warning
+
+_SCREENSHOT_JS = Path(__file__).resolve().parents[1] / "html2pptx" / "screenshot.js"
+_DEFAULT_CHROMIUM = Path(
+    "/mnt/c/Users/X0160146/Desktop/26/playwright/chromium-1223/chrome-linux64/chrome"
+)
+
+
+def _get_chromium_executable() -> str | None:
+    env_path = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")
+    if env_path and Path(env_path).exists():
+        return env_path
+    if _DEFAULT_CHROMIUM.exists():
+        return str(_DEFAULT_CHROMIUM)
+    return None
+
+
+async def _screenshot_slide(html_file: str, aspect_ratio: str = "16:9") -> bytes | None:
+    """HTML 슬라이드를 Playwright로 렌더링하여 JPEG bytes를 반환. 실패 시 None."""
+    if not _SCREENSHOT_JS.exists():
+        warning("screenshot.js not found — visual inspect disabled")
+        return None
+
+    SIZES = {
+        "16:9": (1280, 720), "4:3": (960, 720),
+        "A1": (2244, 3178), "A2": (1587, 2244), "A3": (1122, 1587), "A4": (794, 1123),
+    }
+    w, h = SIZES.get(aspect_ratio, (1280, 720))
+
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+        output = f.name
+
+    try:
+        env = os.environ.copy()
+        chromium_exe = _get_chromium_executable()
+        if chromium_exe:
+            env["PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH"] = chromium_exe
+
+        proc = await asyncio.create_subprocess_exec(
+            "node", str(_SCREENSHOT_JS),
+            "--html", str(Path(html_file).resolve()),
+            "--output", output,
+            "--width", str(w), "--height", str(h),
+            cwd=str(_SCREENSHOT_JS.parent),
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+
+        if proc.returncode == 0 and Path(output).exists():
+            return Path(output).read_bytes()
+        warning(f"screenshot.js failed: {stdout.decode(errors='replace')}")
+    except Exception as e:
+        warning(f"_screenshot_slide error: {e}")
+    finally:
+        try:
+            os.unlink(output)
+        except Exception:
+            pass
+    return None
 
 
 # ── finalize ──────────────────────────────────────────────────────────────────
@@ -238,14 +301,14 @@ INSPECT_MANUSCRIPT_SPEC = {
 
 # ── inspect_slide ─────────────────────────────────────────────────────────────
 
-def inspect_slide(
+async def inspect_slide(
     html_file: str,
     aspect_ratio: str = "16:9",
-) -> str:
+) -> str | list:
     """
     Validate an HTML slide file.
-    Checks existence, basic HTML structure, and fixed-size body declaration.
-    Returns a validation summary or raises AssertionError on failure.
+    Structural checks first (text-based). If HEAVY_REFLECT is enabled,
+    also renders the slide and returns an image for visual VLM review.
     """
     path = Path(html_file)
     assert path.exists() and path.suffix == ".html", \
@@ -273,13 +336,33 @@ def inspect_slide(
     if "url(" in content and "http" in content:
         issues.append("External image URL detected — images should be local paths.")
 
-    # bare text 검사: <div>, <section> 등 블록 요소 안에 <p>/<h1~6>/<li>/<span> 없이
-    # 직접 텍스트가 들어간 경우를 찾음 (html2pptx.js 변환 시 해당 텍스트 누락됨)
     bare_text_issues = _check_bare_text(content)
     issues.extend(bare_text_issues)
 
+    # 구조적 문제가 있으면 먼저 수정하도록 텍스트로 반환 (스크린샷 불필요)
     if issues:
         return "Issues found:\n" + "\n".join(f"- {i}" for i in issues)
+
+    # 구조 검사 통과 — heavy_reflect 모드면 렌더링 이미지 반환
+    if HEAVY_REFLECT:
+        img_bytes = await _screenshot_slide(html_file, aspect_ratio)
+        if img_bytes:
+            b64 = base64.b64encode(img_bytes).decode()
+            return [
+                {
+                    "type": "text",
+                    "text": (
+                        "Slide structure is valid. "
+                        "Review the rendered image below for visual quality "
+                        "(layout balance, font readability, overflow, spacing, aesthetics). "
+                        "If improvements are needed, rewrite the HTML and call inspect_slide again."
+                    ),
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                },
+            ]
 
     return f"Slide is valid. ({len(content)} chars, aspect_ratio={aspect_ratio})"
 
