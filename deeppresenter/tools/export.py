@@ -6,40 +6,24 @@ from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parents[1] / "html2pptx"
 _CLI_JS = _SCRIPT_DIR / "html2pptx_cli.js"
-_CHROMIUM_ZIP = Path(__file__).resolve().parents[3] / "bin" / "chromium-linux64.zip"
-_CHROMIUM_DIR = Path(__file__).resolve().parents[3] / "bin" / "chromium"
+
+# 기본 Chromium 경로 — 환경변수 PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH 로 덮어쓸 수 있음
+_DEFAULT_CHROMIUM = Path(
+    "/mnt/c/Users/X0160146/Desktop/26/playwright/chromium-1223/chrome-linux64/chrome"
+)
 
 
 def _get_chromium_executable() -> str | None:
-    """Return path to local Chromium binary, extracting zip on first call."""
-    if not _CHROMIUM_ZIP.exists():
-        return None
+    """Return Chromium executable path (env var > default path)."""
+    # 1. 환경변수 우선
+    env_path = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")
+    if env_path and Path(env_path).exists():
+        return env_path
 
-    if not _CHROMIUM_DIR.exists():
-        _extract_chromium()
+    # 2. 기본 경로
+    if _DEFAULT_CHROMIUM.exists():
+        return str(_DEFAULT_CHROMIUM)
 
-    return _find_binary(_CHROMIUM_DIR)
-
-
-def _extract_chromium() -> None:
-    import stat
-    import zipfile
-
-    _CHROMIUM_DIR.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(_CHROMIUM_ZIP, "r") as zf:
-        zf.extractall(_CHROMIUM_DIR)
-
-    for f in _CHROMIUM_DIR.rglob("*"):
-        if f.is_file() and not f.suffix:
-            f.chmod(f.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-
-
-def _find_binary(base: Path) -> str | None:
-    import os as _os
-    for name in ("chrome", "chromium", "chromium-browser"):
-        for candidate in base.rglob(name):
-            if candidate.is_file() and _os.access(candidate, _os.X_OK):
-                return str(candidate)
     return None
 
 
