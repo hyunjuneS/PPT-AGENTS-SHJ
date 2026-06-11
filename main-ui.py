@@ -3,9 +3,6 @@ import logging
 import os
 
 import uvicorn
-from dotenv import load_dotenv
-
-load_dotenv()  # .env 파일이 있으면 자동으로 환경변수로 로드
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
@@ -21,11 +18,13 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="PPT Agent API", version="0.1.0")
 
 # ---------------------------------------------------------------------------
-# LLM setup — configure via environment variables
+# LLM — 환경변수에서 읽음.
+# __main__ 블록에서 args → os.environ 에 먼저 쓴 뒤 uvicorn을 띄우기 때문에
+# reload worker가 이 모듈을 다시 import해도 올바른 값을 가져간다.
 # ---------------------------------------------------------------------------
 _llm = AsyncLLM(
     model=os.environ.get("MODEL_NAME", "claude-opus-4-5"),
-    base_url=os.environ.get("OPENAI_BASE_URL", None),
+    base_url=os.environ.get("OPENAI_BASE_URL") or None,
     api_key=os.environ.get("OPENAI_API_KEY", ""),
 )
 
@@ -94,12 +93,14 @@ def parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
     args = parse_args()
 
-    _llm.api_key  = args.apikey
-    _llm.base_url = args.llmurl
-    _llm.model    = args.model
-    _llm.__post_init__()  # 변경된 값으로 AsyncOpenAI 클라이언트 재생성
+    # args 값을 환경변수로 먼저 설정 → uvicorn worker가 모듈을 re-import할 때
+    # 위의 os.environ.get() 호출이 올바른 값을 읽어간다.
+    os.environ["OPENAI_API_KEY"] = args.apikey
+    os.environ["MODEL_NAME"]     = args.model
+    if args.llmurl:
+        os.environ["OPENAI_BASE_URL"] = args.llmurl
 
-    logger.info("LLM  : model=%s url=%s", _llm.model, _llm.base_url)
+    logger.info("LLM  : model=%s url=%s", args.model, args.llmurl)
     logger.info("Server: host=%s port=%d reload=%s log_level=%s",
                 args.host, args.port, args.reload, args.log_level)
 
