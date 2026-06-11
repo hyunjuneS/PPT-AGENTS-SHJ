@@ -1,6 +1,8 @@
 """Local tool implementations for the DeepPresenter agents."""
 
 import asyncio
+import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -9,6 +11,36 @@ from deeppresenter.utils.log import debug, warning
 
 
 # ── finalize ──────────────────────────────────────────────────────────────────
+
+def _rewrite_image_links(path: Path) -> None:
+    """Research 결과물의 이미지 경로를 절대 경로로 재작성 (WSL 동일)."""
+    md_dir = path.parent
+    content = path.read_text(encoding="utf-8")
+
+    def _replace(match: re.Match) -> str:
+        alt_text = match.group(1)
+        target = match.group(2).strip()
+        if not target:
+            return match.group(0)
+        parts = re.match(r"([^\s]+)(.*)", target)
+        if not parts:
+            return match.group(0)
+        local_path = parts.group(1).strip("\"'")
+        rest = parts.group(2)
+        p = Path(local_path)
+        if not p.is_absolute() and (md_dir / local_path).exists():
+            p = md_dir / local_path
+        if not p.exists():
+            return match.group(0)
+        return f"![{alt_text}]({p.resolve().as_posix()}{rest})"
+
+    try:
+        rewritten = re.sub(r"!\[(.*?)\]\((.*?)\)", _replace, content)
+        shutil.copyfile(path, md_dir / ("." + path.name))  # 원본 백업
+        path.write_text(rewritten, encoding="utf-8")
+    except Exception as e:
+        warning(f"Failed to rewrite image links: {e}")
+
 
 def finalize(outcome: str, agent_name: str = "") -> str:
     """
@@ -20,8 +52,17 @@ def finalize(outcome: str, agent_name: str = "") -> str:
 
     if agent_name == "Planner":
         assert path.suffix == ".json", f"Planner outcome must be a .json file, got {path.suffix}"
+
     elif agent_name == "Research":
         assert path.suffix == ".md", f"Research outcome must be a .md file, got {path.suffix}"
+        _rewrite_image_links(path)
+
+    elif agent_name == "Design":
+        html_files = list(path.glob("*.html"))
+        if not html_files:
+            return "Outcome path should be a directory containing HTML files"
+        if not all(f.stem.startswith("slide_") for f in html_files):
+            return "All HTML files should be named slide_NN.html"
 
     debug(f"Agent {agent_name} finalized outcome: {outcome}")
     return outcome
