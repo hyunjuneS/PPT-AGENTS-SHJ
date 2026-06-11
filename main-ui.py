@@ -12,7 +12,7 @@ from agents.agent import Agent
 from agents.llms import AsyncLLM
 
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -274,9 +274,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--host",      default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
     parser.add_argument("--port",      type=int, default=5000, help="Bind port (default: 5000)")
     parser.add_argument("--reload",    action=argparse.BooleanOptionalAction, default=True, help="Auto-reload (default: on)")
-    parser.add_argument("--log-level", default="debug",
+    parser.add_argument("--log-level", default="info",
                         choices=["debug", "info", "warning", "error", "critical"],
-                        help="Uvicorn log level (default: debug)")
+                        help="Uvicorn log level (default: info)")
     parser.add_argument("--heavy-reflect", action="store_true", default=False,
                         help="Enable visual VLM inspection: render each slide and send image to Design agent (requires multimodal model)")
     return parser.parse_args()
