@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 import uuid
 from abc import abstractmethod
 from collections.abc import AsyncGenerator
@@ -29,7 +30,10 @@ from deeppresenter.utils.constants import (
     TOOL_CUTOFF_LEN,
     URGENT_BUDGET_NOTICE_MSG,
 )
-from deeppresenter.utils.log import debug, info, timer
+from deeppresenter.utils.log import (
+    debug, info, timer,
+    show_agent_start, show_agent_turn, show_tool_call, show_tool_result, show_agent_done,
+)
 from deeppresenter.utils.typings import (
     ChatMessage,
     Cost,
@@ -63,6 +67,7 @@ class Agent:
         self.max_turns = max_turns
         self.turn_count = 0
         self.research_iter = 0
+        self._start_time = time.time()
 
         role_config_file = (
             Path(config_file)
@@ -112,6 +117,7 @@ class Agent:
 
         available = [t["function"]["name"] for t in self.tools]
         debug(f"{self.name} Agent: {len(self.tools)} tools: {', '.join(available)}")
+        show_agent_start(self.name, self.max_turns)
 
     def _setup_toolset(self):
         toolset = self.role_config.toolset
@@ -198,6 +204,7 @@ class Agent:
             )
             self.log_message(self.chat_history[-1])
 
+        show_agent_turn(self.name, self.turn_count, self.max_turns)
         with timer(f"{self.name} LLM action (turn {self.turn_count})"):
             response = await self.llm.run(
                 messages=self.chat_history,
@@ -256,17 +263,26 @@ class Agent:
                 self.log_message(obs)
                 continue
 
-            info(f"{self.name} calling tool '{t.function.name}'")
+            try:
+                display_args = json.loads(t.function.arguments or "{}")
+            except Exception:
+                display_args = {}
+            show_tool_call(t.function.name, display_args)
             coros.append(self.agent_env.tool_execute(t))
 
         observations: list[ChatMessage] = await asyncio.gather(*coros)
+
+        # Show tool results
+        for obs in observations:
+            show_tool_result(obs.text, obs.is_error)
 
         self.chat_history.extend(observations)
 
         if finish_id is not None:
             for obs in observations:
                 if obs.tool_call_id == finish_id and obs.text == outcome:
-                    info(f"{self.name} finished: {obs.text}")
+                    elapsed = time.time() - self._start_time
+                    show_agent_done(self.name, self.turn_count, elapsed)
                     return obs.text
 
         # Context budget warnings
@@ -279,8 +295,9 @@ class Agent:
             if observations:
                 observations[0].content.insert(0, URGENT_BUDGET_NOTICE_MSG)
 
+        # tool results already shown via show_tool_result above; debug log only
         for obs in observations:
-            self.log_message(obs)
+            debug(f"[{self.name}|tool] {obs.text[:200]}")
 
         if self.context_length > self.context_window:
             if self.context_warning == -1:
@@ -383,4 +400,4 @@ class Agent:
                 indent=2,
             )
 
-        debug(f"{self.name} done | cost:{self.cost} ctx:{self.context_length}")
+        debug(f"{self.name} done | turns:{self.turn_count} cost:{self.cost} ctx:{self.context_length}")

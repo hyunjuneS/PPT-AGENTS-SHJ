@@ -60,6 +60,68 @@ def warning(msg, *args, **kwargs): get_logger().warning(msg, *args, **kwargs)
 def error(msg, *args, **kwargs): get_logger().error(msg, *args, **kwargs)
 
 
+# ── Pretty progress display ───────────────────────────────────────────────────
+
+_R = "\033[0m"
+_BOLD = "\033[1m"
+_DIM = "\033[2m"
+_CYAN = "\033[36m"
+_YELLOW = "\033[33m"
+_GREEN = "\033[32m"
+_RED = "\033[31m"
+_MAGENTA = "\033[35m"
+
+_AGENT_ICON = {"Research": "🔬", "Design": "🎨", "Planner": "📋"}
+_TOOL_ICON = {
+    "write_file": "✍ ", "read_file": "📖", "inspect_slide": "🔍",
+    "inspect_manuscript": "🔍", "execute_command": "⚡", "finalize": "🏁",
+    "web_search": "🌐", "web_fetch": "🌐",
+}
+
+
+def _shorten(s: str, n: int = 60) -> str:
+    s = s.strip().replace("\n", " ")
+    return s[:n] + "…" if len(s) > n else s
+
+
+def show_agent_start(name: str, max_turns: int | None = None) -> None:
+    icon = _AGENT_ICON.get(name, "🤖")
+    limit = f"  (max {max_turns} turns)" if max_turns else ""
+    print(f"\n{_BOLD}{_CYAN}{icon}  {name} Agent{_R}{_DIM}{limit}{_R}", flush=True)
+
+
+def show_agent_turn(name: str, turn: int, max_turns: int | None = None) -> None:
+    limit = f"/{max_turns}" if max_turns else ""
+    print(f"  {_DIM}── turn {turn}{limit} {'─' * 36}{_R}", flush=True)
+
+
+def show_tool_call(tool: str, args: dict) -> None:
+    icon = _TOOL_ICON.get(tool, "⚙ ")
+    # Pick the most informative argument to display
+    arg_val = ""
+    for key in ("path", "html_file", "outcome", "command", "query", "url"):
+        if key in args:
+            arg_val = _shorten(str(args[key]))
+            break
+    arg_str = f"  {_DIM}{arg_val}{_R}" if arg_val else ""
+    print(f"    {_YELLOW}{icon} {tool}{_R}{arg_str}", flush=True)
+
+
+def show_tool_result(text: str, is_error: bool = False) -> None:
+    color = _RED if is_error else _GREEN
+    icon = "✗" if is_error else "✓"
+    print(f"      {color}{icon}{_R} {_DIM}{_shorten(text, 80)}{_R}", flush=True)
+
+
+def show_agent_done(name: str, turns: int, elapsed: float) -> None:
+    icon = _AGENT_ICON.get(name, "🤖")
+    print(
+        f"  {_GREEN}✓{_R} {_BOLD}{name}{_R} done"
+        f"  {_DIM}{turns} turns  {elapsed:.1f}s{_R}\n",
+        flush=True,
+    )
+
+
 class timer:
     def __init__(self, name: str = ""):
         self.name = name
