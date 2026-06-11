@@ -6,7 +6,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from agents.agent import Agent
 from agents.llms import AsyncLLM
@@ -146,13 +146,12 @@ async def research(
     if manuscript_path is None:
         raise HTTPException(status_code=500, detail="Research agent did not produce a manuscript.")
 
-    manuscript_content = Path(manuscript_path).read_text(encoding="utf-8")
-    return JSONResponse(content={
-        "session_id": session_id,
-        "manuscript_path": manuscript_path,
-        "manuscript": manuscript_content,
-        "turns": len(messages_log),
-    })
+    return FileResponse(
+        path=manuscript_path,
+        media_type="text/markdown",
+        filename=Path(manuscript_path).name,
+        headers={"X-Session-Id": session_id, "X-Turns": str(len(messages_log))},
+    )
 
 
 @app.post("/design")
