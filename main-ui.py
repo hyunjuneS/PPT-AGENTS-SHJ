@@ -273,9 +273,9 @@ async def design(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="PPT Agent FastAPI server")
     # LLM
-    parser.add_argument("--apikey",  required=True, help="LLM API key")
-    parser.add_argument("--llmurl",  default=None,  help="LLM base URL (OpenAI-compatible)")
-    parser.add_argument("--model",   default="claude-opus-4-5", help="Model name (default: claude-opus-4-5)")
+    parser.add_argument("--api-key", required=True, help="LLM API key")
+    parser.add_argument("--url",     default=None,  help="LLM base URL (OpenAI-compatible)")
+    parser.add_argument("--llm",     default="claude-opus-4-5", help="Model name (default: claude-opus-4-5)")
     parser.add_argument("--timeout", type=int, default=120, help="LLM request timeout in seconds (default: 120)")
     # Server
     parser.add_argument("--host",      default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
@@ -285,8 +285,8 @@ def parse_args() -> argparse.Namespace:
                         choices=["debug", "info", "warning", "error", "critical"],
                         help="Uvicorn log level (default: info)")
     parser.add_argument("--heavy-reflect", action="store_true", default=False,
-                        help="Enable visual VLM inspection: render each slide and send image to Design agent (requires --vlm-model)")
-    parser.add_argument("--vlm-model", default=None,
+                        help="Enable visual VLM inspection: render each slide and send image to Design agent (requires --vlm)")
+    parser.add_argument("--vlm", default=None,
                         help="Multimodal model for Design agent visual inspection (required when --heavy-reflect is set).")
     return parser.parse_args()
 
@@ -294,22 +294,22 @@ def parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
     args = parse_args()
 
-    if args.heavy_reflect and not args.vlm_model:
+    if args.heavy_reflect and not args.vlm:
         import sys
-        print("error: --vlm-model is required when --heavy-reflect is set", file=sys.stderr)
+        print("error: --vlm is required when --heavy-reflect is set", file=sys.stderr)
         sys.exit(1)
 
-    os.environ["OPENAI_API_KEY"]  = args.apikey
-    os.environ["MODEL_NAME"]      = args.model
+    os.environ["OPENAI_API_KEY"]  = args.api_key
+    os.environ["MODEL_NAME"]      = args.llm
     os.environ["LLM_TIMEOUT"]     = str(args.timeout)
-    if args.llmurl:
-        os.environ["OPENAI_BASE_URL"] = args.llmurl
+    if args.url:
+        os.environ["OPENAI_BASE_URL"] = args.url
     if args.heavy_reflect:
         os.environ["DEEPPRESENTER_HEAVY_REFLECT"] = "1"
-    if args.vlm_model:
-        os.environ["DESIGN_MODEL_NAME"] = args.vlm_model
+    if args.vlm:
+        os.environ["DESIGN_MODEL_NAME"] = args.vlm
 
-    logger.info("LLM  : model=%s  vlm_model=%s  url=%s", args.model, args.vlm_model or "(none)", args.llmurl)
+    logger.info("LLM  : model=%s  vlm=%s  url=%s", args.llm, args.vlm or "(none)", args.url)
     logger.info("Server: host=%s port=%d reload=%s log_level=%s",
                 args.host, args.port, args.reload, args.log_level)
 
