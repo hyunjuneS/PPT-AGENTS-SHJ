@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import time
 import uuid
 from abc import abstractmethod
@@ -176,6 +177,29 @@ class Agent:
         self.log_message(assistant_msg)
         return assistant_msg
 
+    def _cap_images(self, messages: list) -> list:
+        """이미지가 누적되어 모델 한도를 초과하지 않도록 오래된 이미지를 텍스트로 교체."""
+        max_images = int(os.environ.get("VLM_MAX_IMAGES", "2"))
+        image_indices = [i for i, m in enumerate(messages) if m.has_image]
+        to_strip = set(image_indices[:-max_images]) if len(image_indices) > max_images else set()
+        if not to_strip:
+            return messages
+        result = []
+        for i, msg in enumerate(messages):
+            if i in to_strip:
+                text_blocks = [b for b in (msg.content or []) if b.get("type") == "text"]
+                text_blocks.append({"type": "text", "text": "(이전 슬라이드 이미지 — 컨텍스트 한도로 제거됨)"})
+                stripped = ChatMessage(
+                    role=msg.role,
+                    content=text_blocks,
+                    tool_call_id=msg.tool_call_id,
+                    tool_calls=msg.tool_calls,
+                )
+                result.append(stripped)
+            else:
+                result.append(msg)
+        return result
+
     async def action(self, **chat_kwargs) -> ChatMessage:
         self.turn_count += 1
 
@@ -207,7 +231,7 @@ class Agent:
         show_agent_turn(self.name, self.turn_count, self.max_turns)
         with timer(f"{self.name} LLM action (turn {self.turn_count})"):
             response = await self.llm.run(
-                messages=self.chat_history,
+                messages=self._cap_images(self.chat_history),
                 tools=self.tools,
             )
 
