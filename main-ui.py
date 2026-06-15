@@ -233,7 +233,12 @@ async def design(
 
     req = InputRequest(instruction=instruction, language=language)
 
-    logger.info("[Design] session=%s file=%s", session_id, file.filename)
+    template_content = ""
+    tmpl_path = os.environ.get("DESIGN_TEMPLATE_FILE")
+    if tmpl_path and Path(tmpl_path).exists():
+        template_content = Path(tmpl_path).read_text(encoding="utf-8")
+
+    logger.info("[Design] session=%s file=%s template=%s", session_id, file.filename, bool(template_content))
 
     config = _make_deep_config()
     slides_dir = None
@@ -242,7 +247,7 @@ async def design(
     try:
         async with AgentEnv(workspace) as env:
             agent = Design(config=config, agent_env=env, workspace=workspace, language=language)
-            async for item in agent.loop(req, markdown_file=str(manuscript_path)):
+            async for item in agent.loop(req, markdown_file=str(manuscript_path), template_content=template_content):
                 if isinstance(item, str):
                     slides_dir = item
                     break
@@ -288,16 +293,25 @@ def parse_args() -> argparse.Namespace:
                         help="Enable visual VLM inspection: render each slide and send image to Design agent (requires --vlm)")
     parser.add_argument("--vlm", default=None,
                         help="Multimodal model for Design agent visual inspection (required when --heavy-reflect is set).")
+    parser.add_argument("--template", default=None,
+                        help="Design 에이전트에 주입할 디자인 스킬 파일 (.md). §2 디자인 규칙 / §3 금지 사항 / §4 표현 가이드를 담은 파일을 지정한다.")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
+    import sys
     args = parse_args()
 
     if args.heavy_reflect and not args.vlm:
-        import sys
         print("error: --vlm is required when --heavy-reflect is set", file=sys.stderr)
         sys.exit(1)
+
+    if args.template:
+        tmpl = Path(args.template).resolve()
+        if not tmpl.exists():
+            print(f"error: --template file not found: {tmpl}", file=sys.stderr)
+            sys.exit(1)
+        os.environ["DESIGN_TEMPLATE_FILE"] = str(tmpl)
 
     os.environ["OPENAI_API_KEY"]  = args.api_key
     os.environ["MODEL_NAME"]      = args.llm
@@ -309,7 +323,8 @@ if __name__ == "__main__":
     if args.vlm:
         os.environ["DESIGN_MODEL_NAME"] = args.vlm
 
-    logger.info("LLM  : model=%s  vlm=%s  url=%s", args.llm, args.vlm or "(none)", args.url)
+    logger.info("LLM  : model=%s  vlm=%s  template=%s  url=%s",
+                args.llm, args.vlm or "(none)", args.template or "(none)", args.url)
     logger.info("Server: host=%s port=%d reload=%s log_level=%s",
                 args.host, args.port, args.reload, args.log_level)
 
