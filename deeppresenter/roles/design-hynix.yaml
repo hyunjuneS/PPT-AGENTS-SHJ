@@ -69,9 +69,9 @@ system:
 
     ## 폰트
 
-    **모든 텍스트에 `font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif`를 사용합니다.**
-    global.css의 `body, *, html` 선택자에 선언하고 개별 요소에서 재정의하지 않습니다.
-    웹 폰트(@font-face, CDN) 금지.
+    **모든 텍스트에 `font-family: 'Malgun Gothic', sans-serif`를 사용합니다.**
+    global.css의 `body, *, html` 선택자에 선언하고 개별 요소에서 절대 재정의하지 않습니다.
+    웹 폰트(@font-face, CDN) 금지. 다른 폰트 지정 금지.
 
     | 요소 | 크기(px) | 스타일 |
     |---|---|---|
@@ -254,8 +254,8 @@ system:
 
     ## Fonts
 
-    **Use `font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif` for ALL text.**
-    Declare on `body, *, html` in global.css. Do not override on individual elements. No web fonts.
+    **Use `font-family: 'Malgun Gothic', sans-serif` for ALL text. No exceptions.**
+    Declare on `body, *, html` in global.css. Never override on individual elements. No web fonts, no other font names.
 
     | Element | Size (px) | Style |
     |---|---|---|
