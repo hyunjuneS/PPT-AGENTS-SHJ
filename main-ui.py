@@ -238,7 +238,12 @@ async def design(
     if tmpl_path and Path(tmpl_path).exists():
         template_content = Path(tmpl_path).read_text(encoding="utf-8")
 
-    logger.info("[Design] session=%s file=%s template=%s", session_id, file.filename, bool(template_content))
+    config_file = os.environ.get("DESIGN_CONFIG_FILE") or None
+
+    logger.info("[Design] session=%s file=%s config=%s template=%s",
+                session_id, file.filename,
+                Path(config_file).name if config_file else "Design.yaml",
+                bool(template_content))
 
     config = _make_deep_config()
     slides_dir = None
@@ -246,7 +251,8 @@ async def design(
 
     try:
         async with AgentEnv(workspace) as env:
-            agent = Design(config=config, agent_env=env, workspace=workspace, language=language)
+            agent = Design(config=config, agent_env=env, workspace=workspace, language=language,
+                           config_file=config_file)
             async for item in agent.loop(req, markdown_file=str(manuscript_path), template_content=template_content):
                 if isinstance(item, str):
                     slides_dir = item
@@ -311,7 +317,10 @@ if __name__ == "__main__":
         if not tmpl.exists():
             print(f"error: --template file not found: {tmpl}", file=sys.stderr)
             sys.exit(1)
-        os.environ["DESIGN_TEMPLATE_FILE"] = str(tmpl)
+        if tmpl.suffix in (".yaml", ".yml"):
+            os.environ["DESIGN_CONFIG_FILE"] = str(tmpl)   # role YAML 교체
+        else:
+            os.environ["DESIGN_TEMPLATE_FILE"] = str(tmpl) # instruction 주입 (.md)
 
     os.environ["OPENAI_API_KEY"]  = args.api_key
     os.environ["MODEL_NAME"]      = args.llm
