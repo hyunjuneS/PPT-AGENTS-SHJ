@@ -98,7 +98,7 @@ async def analyze_markdown(file: UploadFile = File(...)):
 async def research(
     file: UploadFile = File(...),
     instruction: str = Form(...),
-    language: str = Form(default="ko"),
+    language: str = Form(default="en"),
 ):
     """[DeepPresenter] .md 파일 + instruction → Research 에이전트로 슬라이드 원고 생성."""
     from deeppresenter.agents.env import AgentEnv
@@ -207,7 +207,7 @@ async def export_pptx(
 async def design(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
-    language: str = Form(default="ko"),
+    language: str = Form(default="en"),
 ):
     """[DeepPresenter] 슬라이드 원고 .md → Design 에이전트 → HTML 슬라이드 생성."""
     from deeppresenter.agents.design import Design
@@ -233,7 +233,17 @@ async def design(
 
     req = InputRequest(instruction=instruction, language=language)
 
-    logger.info("[Design] session=%s file=%s", session_id, file.filename)
+    template_content = ""
+    tmpl_path = os.environ.get("DESIGN_TEMPLATE_FILE")
+    if tmpl_path and Path(tmpl_path).exists():
+        template_content = Path(tmpl_path).read_text(encoding="utf-8")
+
+    config_file = os.environ.get("DESIGN_CONFIG_FILE") or None
+
+    logger.info("[Design] session=%s file=%s config=%s template=%s",
+                session_id, file.filename,
+                Path(config_file).name if config_file else "Design.yaml",
+                bool(template_content))
 
     config = _make_deep_config()
     slides_dir = None
@@ -241,8 +251,9 @@ async def design(
 
     try:
         async with AgentEnv(workspace) as env:
-            agent = Design(config=config, agent_env=env, workspace=workspace, language=language)
-            async for item in agent.loop(req, markdown_file=str(manuscript_path)):
+            agent = Design(config=config, agent_env=env, workspace=workspace, language=language,
+                           config_file=config_file)
+            async for item in agent.loop(req, markdown_file=str(manuscript_path), template_content=template_content):
                 if isinstance(item, str):
                     slides_dir = item
                     break
@@ -273,9 +284,9 @@ async def design(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="PPT Agent FastAPI server")
     # LLM
-    parser.add_argument("--apikey",  required=True, help="LLM API key")
-    parser.add_argument("--llmurl",  default=None,  help="LLM base URL (OpenAI-compatible)")
-    parser.add_argument("--model",   default="claude-opus-4-5", help="Model name (default: claude-opus-4-5)")
+    parser.add_argument("--api-key", required=True, help="LLM API key")
+    parser.add_argument("--url",     default=None,  help="LLM base URL (OpenAI-compatible)")
+    parser.add_argument("--llm",     default="claude-opus-4-5", help="Model name (default: claude-opus-4-5)")
     parser.add_argument("--timeout", type=int, default=120, help="LLM request timeout in seconds (default: 120)")
     # Server
     parser.add_argument("--host",      default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
@@ -285,31 +296,44 @@ def parse_args() -> argparse.Namespace:
                         choices=["debug", "info", "warning", "error", "critical"],
                         help="Uvicorn log level (default: info)")
     parser.add_argument("--heavy-reflect", action="store_true", default=False,
-                        help="Enable visual VLM inspection: render each slide and send image to Design agent (requires --vlm-model)")
-    parser.add_argument("--vlm-model", default=None,
+                        help="Enable visual VLM inspection: render each slide and send image to Design agent (requires --vlm)")
+    parser.add_argument("--vlm", default=None,
                         help="Multimodal model for Design agent visual inspection (required when --heavy-reflect is set).")
+    parser.add_argument("--template", default=None,
+                        help="Design 에이전트에 주입할 디자인 스킬 파일 (.md). §2 디자인 규칙 / §3 금지 사항 / §4 표현 가이드를 담은 파일을 지정한다.")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
+    import sys
     args = parse_args()
 
-    if args.heavy_reflect and not args.vlm_model:
-        import sys
-        print("error: --vlm-model is required when --heavy-reflect is set", file=sys.stderr)
+    if args.heavy_reflect and not args.vlm:
+        print("error: --vlm is required when --heavy-reflect is set", file=sys.stderr)
         sys.exit(1)
 
-    os.environ["OPENAI_API_KEY"]  = args.apikey
-    os.environ["MODEL_NAME"]      = args.model
+    if args.template:
+        tmpl = Path(args.template).resolve()
+        if not tmpl.exists():
+            print(f"error: --template file not found: {tmpl}", file=sys.stderr)
+            sys.exit(1)
+        if tmpl.suffix in (".yaml", ".yml"):
+            os.environ["DESIGN_CONFIG_FILE"] = str(tmpl)   # role YAML 교체
+        else:
+            os.environ["DESIGN_TEMPLATE_FILE"] = str(tmpl) # instruction 주입 (.md)
+
+    os.environ["OPENAI_API_KEY"]  = args.api_key
+    os.environ["MODEL_NAME"]      = args.llm
     os.environ["LLM_TIMEOUT"]     = str(args.timeout)
-    if args.llmurl:
-        os.environ["OPENAI_BASE_URL"] = args.llmurl
+    if args.url:
+        os.environ["OPENAI_BASE_URL"] = args.url
     if args.heavy_reflect:
         os.environ["DEEPPRESENTER_HEAVY_REFLECT"] = "1"
-    if args.vlm_model:
-        os.environ["DESIGN_MODEL_NAME"] = args.vlm_model
+    if args.vlm:
+        os.environ["DESIGN_MODEL_NAME"] = args.vlm
 
-    logger.info("LLM  : model=%s  vlm_model=%s  url=%s", args.model, args.vlm_model or "(none)", args.llmurl)
+    logger.info("LLM  : model=%s  vlm=%s  template=%s  url=%s",
+                args.llm, args.vlm or "(none)", args.template or "(none)", args.url)
     logger.info("Server: host=%s port=%d reload=%s log_level=%s",
                 args.host, args.port, args.reload, args.log_level)
 
