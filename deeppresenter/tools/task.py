@@ -169,19 +169,19 @@ FINALIZE_SPEC = {
 
 # ── read_file ─────────────────────────────────────────────────────────────────
 
-def read_file(path: str, offset: int = 0, limit: int = 200) -> str:
+def read_file(path: str, offset: int = 0, length: int = 200) -> str:
     """
-    Read a text file. Use offset/limit for large files.
+    Read a text file. Use offset/length for large files.
     offset: starting line number (0-based).
-    limit: max lines to return.
+    length: max lines to return.
     """
     p = Path(path)
     assert p.exists(), f"File not found: {path}"
     lines = p.read_text(encoding="utf-8").splitlines()
-    chunk = lines[offset: offset + limit]
+    chunk = lines[offset: offset + length]
     result = "\n".join(chunk)
     if len(result) > TOOL_CUTOFF_LEN:
-        result = result[:TOOL_CUTOFF_LEN] + f"\n... (truncated, use offset={offset+limit} to continue)"
+        result = result[:TOOL_CUTOFF_LEN] + f"\n... (truncated, use offset={offset+length} to continue)"
     return result
 
 
@@ -189,13 +189,13 @@ READ_FILE_SPEC = {
     "type": "function",
     "function": {
         "name": "read_file",
-        "description": "Read contents of a local text file. Use offset and limit for large files.",
+        "description": "Read contents of a local text file. Use offset and length for large files.",
         "parameters": {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Absolute path to the file."},
                 "offset": {"type": "integer", "description": "Starting line number (0-based). Default 0."},
-                "limit": {"type": "integer", "description": "Max lines to return. Default 200."},
+                "length": {"type": "integer", "description": "Max lines to return. Default 200."},
             },
             "required": ["path"],
         },
@@ -230,53 +230,67 @@ WRITE_FILE_SPEC = {
 }
 
 
-# ── edit_file ─────────────────────────────────────────────────────────────────
+# ── edit_block ────────────────────────────────────────────────────────────────
 
-def edit_file(path: str, old_str: str, new_str: str) -> str:
+def edit_block(
+    file_path: str,
+    old_string: str,
+    new_string: str,
+    expected_replacements: int = 1,
+) -> str:
     """
-    Replace the first occurrence of old_str with new_str in a file.
-    Raises if old_str is not found or is ambiguous (multiple matches).
+    Replace occurrences of old_string with new_string in a file.
+    Raises if match count does not equal expected_replacements.
     """
-    p = Path(path)
-    assert p.exists(), f"File not found: {path}"
+    p = Path(file_path)
+    assert p.exists(), f"File not found: {file_path}"
     content = p.read_text(encoding="utf-8")
-    count = content.count(old_str)
-    assert count > 0, f"old_str not found in {path}"
-    assert count == 1, (
-        f"old_str matches {count} locations in {path} — make it more specific"
+    count = content.count(old_string)
+    assert count > 0, f"old_string not found in {file_path}"
+    assert count == expected_replacements, (
+        f"old_string matches {count} location(s) in {file_path}, "
+        f"expected {expected_replacements} — make it more specific or adjust expected_replacements"
     )
-    new_content = content.replace(old_str, new_str, 1)
+    new_content = content.replace(old_string, new_string, expected_replacements)
     p.write_text(new_content, encoding="utf-8")
-    delta = len(new_str) - len(old_str)
-    return f"Edited {path}: replaced 1 occurrence (size delta {delta:+d} chars)"
+    delta = len(new_string) - len(old_string)
+    return (
+        f"Edited {file_path}: replaced {expected_replacements} occurrence(s) "
+        f"(size delta {delta:+d} chars)"
+    )
 
 
-EDIT_FILE_SPEC = {
+EDIT_BLOCK_SPEC = {
     "type": "function",
     "function": {
-        "name": "edit_file",
+        "name": "edit_block",
         "description": (
             "Replace an exact string in a file with new content. "
-            "old_str must appear exactly once — use read_file first to find the unique context. "
+            "old_string must match exactly expected_replacements times. "
+            "Use read_file first to locate the unique context. "
             "Prefer this over write_file when making targeted edits."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "path": {
+                "file_path": {
                     "type": "string",
                     "description": "Absolute path to the file.",
                 },
-                "old_str": {
+                "old_string": {
                     "type": "string",
-                    "description": "The exact string to replace. Must appear exactly once in the file.",
+                    "description": "The exact string to replace.",
                 },
-                "new_str": {
+                "new_string": {
                     "type": "string",
-                    "description": "The string to substitute in place of old_str.",
+                    "description": "The string to substitute in place of old_string.",
+                },
+                "expected_replacements": {
+                    "type": "integer",
+                    "description": "Number of occurrences to replace. Default 1.",
                 },
             },
-            "required": ["path", "old_str", "new_str"],
+            "required": ["file_path", "old_string", "new_string"],
         },
     },
 }
@@ -497,13 +511,83 @@ INSPECT_SLIDE_SPEC = {
 }
 
 
+# ── create_directory ──────────────────────────────────────────────────────────
+
+def create_directory(path: str) -> str:
+    """Create a directory (and any missing parents)."""
+    p = Path(path)
+    p.mkdir(parents=True, exist_ok=True)
+    return f"Directory created: {path}"
+
+
+CREATE_DIRECTORY_SPEC = {
+    "type": "function",
+    "function": {
+        "name": "create_directory",
+        "description": "Create a directory and any missing parent directories.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path of the directory to create."},
+            },
+            "required": ["path"],
+        },
+    },
+}
+
+
+# ── list_directory ─────────────────────────────────────────────────────────────
+
+def list_directory(path: str, depth: int = 1) -> str:
+    """List the contents of a directory up to the given depth."""
+    p = Path(path)
+    assert p.exists() and p.is_dir(), f"Directory not found: {path}"
+
+    lines = []
+
+    def _walk(current: Path, current_depth: int) -> None:
+        if current_depth > depth:
+            return
+        for child in sorted(current.iterdir()):
+            indent = "  " * (current_depth - 1)
+            marker = "/" if child.is_dir() else ""
+            lines.append(f"{indent}{child.name}{marker}")
+            if child.is_dir() and current_depth < depth:
+                _walk(child, current_depth + 1)
+
+    _walk(p, 1)
+    result = "\n".join(lines)
+    if len(result) > TOOL_CUTOFF_LEN:
+        result = result[:TOOL_CUTOFF_LEN] + "\n... (truncated)"
+    return result or "(empty)"
+
+
+LIST_DIRECTORY_SPEC = {
+    "type": "function",
+    "function": {
+        "name": "list_directory",
+        "description": "List the contents of a directory. Use depth to control recursion.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path to the directory."},
+                "depth": {"type": "integer", "description": "Recursion depth. Default 1 (immediate children only)."},
+            },
+            "required": ["path"],
+        },
+    },
+}
+
+
 # ── registry ──────────────────────────────────────────────────────────────────
 
 ALL_TOOLS: dict[str, tuple[dict, object]] = {
     "finalize":           (FINALIZE_SPEC,          finalize),
     "read_file":          (READ_FILE_SPEC,          read_file),
     "write_file":         (WRITE_FILE_SPEC,         write_file),
-    "edit_file":          (EDIT_FILE_SPEC,          edit_file),
+    "edit_block":         (EDIT_BLOCK_SPEC,         edit_block),
+    "create_directory":   (CREATE_DIRECTORY_SPEC,   create_directory),
+    "list_directory":     (LIST_DIRECTORY_SPEC,     list_directory),
     "execute_command":    (EXECUTE_COMMAND_SPEC,    execute_command),
     "inspect_manuscript": (INSPECT_MANUSCRIPT_SPEC, inspect_manuscript),
     "inspect_slide":      (INSPECT_SLIDE_SPEC,      inspect_slide),
