@@ -98,7 +98,7 @@ async def analyze_markdown(file: UploadFile = File(...)):
 async def research(
     file: UploadFile = File(...),
     instruction: str = Form(...),
-    language: str = Form(default="ko"),
+    language: str = Form(default="en"),
 ):
     """[DeepPresenter] .md 파일 + instruction → Research 에이전트로 슬라이드 원고 생성."""
     from deeppresenter.agents.env import AgentEnv
@@ -207,7 +207,7 @@ async def export_pptx(
 async def design(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
-    language: str = Form(default="ko"),
+    language: str = Form(default="en"),
 ):
     """[DeepPresenter] 슬라이드 원고 .md → Design 에이전트 → HTML 슬라이드 생성."""
     from deeppresenter.agents.design import Design

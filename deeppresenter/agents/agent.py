@@ -93,7 +93,7 @@ class Agent:
         self._setup_toolset()
 
         if language not in self.role_config.system:
-            language = "ko"
+            language = "en"
 
         self.system = self.role_config.system[language]
         self.prompt: Template = Template(self.role_config.instruction, undefined=StrictUndefined)
