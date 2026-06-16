@@ -80,14 +80,6 @@ instruction: |
   사용자 요구사항:
   {{ prompt }}
 
-  {% if template_content %}
-  ──────────────────────────────────────
-  [디자인 스킬] 아래 규칙을 최우선 기준으로 따른다. 기존 스타일 가이드라인보다 이 문서가 우선한다.
-
-  {{ template_content }}
-  ──────────────────────────────────────
-  {% endif %}
-
 use_model: design_agent
 
 toolset:
