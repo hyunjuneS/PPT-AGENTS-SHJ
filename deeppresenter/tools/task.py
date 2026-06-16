@@ -14,6 +14,7 @@ from deeppresenter.utils.constants import HEAVY_REFLECT, TOOL_CUTOFF_LEN
 from deeppresenter.utils.log import debug, warning
 
 _SCREENSHOT_JS = Path(__file__).resolve().parents[1] / "html2pptx" / "screenshot.js"
+_VALIDATE_JS   = Path(__file__).resolve().parents[1] / "html2pptx" / "validate.js"
 _DEFAULT_CHROMIUM = Path(
     "/mnt/c/Users/X0160146/Desktop/26/playwright/chromium-1223/chrome-linux64/chrome"
 )
@@ -72,6 +73,46 @@ async def _screenshot_slide(html_file: str, aspect_ratio: str = "16:9") -> bytes
         except Exception:
             pass
     return None
+
+
+async def _validate_slide_dom(html_file: str, aspect_ratio: str = "16:9") -> list[dict]:
+    """validate.js를 실행해 overflow/overlap 문제를 DOM 수준에서 감지.
+    문제가 없거나 validate.js가 없으면 빈 리스트 반환."""
+    if not _VALIDATE_JS.exists():
+        return []
+
+    SIZES = {
+        "16:9": (1280, 720), "4:3": (960, 720),
+        "A1": (2244, 3178), "A2": (1587, 2244), "A3": (1122, 1587), "A4": (794, 1123),
+    }
+    w, h = SIZES.get(aspect_ratio, (1280, 720))
+
+    try:
+        env = os.environ.copy()
+        chromium_exe = _get_chromium_executable()
+        if chromium_exe:
+            env["PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH"] = chromium_exe
+
+        proc = await asyncio.create_subprocess_exec(
+            "node", str(_VALIDATE_JS),
+            "--html", str(Path(html_file).resolve()),
+            "--width", str(w), "--height", str(h),
+            cwd=str(_VALIDATE_JS.parent),
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+
+        if proc.returncode == 0:
+            import json
+            return json.loads(stdout.decode().strip() or "[]")
+        warning(f"validate.js failed: {stderr.decode(errors='replace')}")
+    except asyncio.TimeoutError:
+        warning("_validate_slide_dom timed out")
+    except Exception as e:
+        warning(f"_validate_slide_dom error: {e}")
+    return []
 
 
 # ── finalize ──────────────────────────────────────────────────────────────────
@@ -343,7 +384,17 @@ async def inspect_slide(
     if issues:
         return "Issues found:\n" + "\n".join(f"- {i}" for i in issues)
 
-    # 구조 검사 통과 — heavy_reflect 모드면 렌더링 이미지 반환
+    # DOM 검사: overflow / overlap (Playwright 기반, 항상 실행)
+    dom_issues = await _validate_slide_dom(html_file, aspect_ratio)
+    if dom_issues:
+        lines = [f"  - [{d['type'].upper()}] {d['element']}: {d['detail']}" for d in dom_issues]
+        return (
+            "DOM validation issues detected — these will cause text to overlap in PowerPoint:\n"
+            + "\n".join(lines)
+            + "\n\nFix the HTML (adjust heights / positions) and call inspect_slide again."
+        )
+
+    # 구조 + DOM 검사 통과 — heavy_reflect 모드면 렌더링 이미지 반환
     if HEAVY_REFLECT:
         img_bytes = await _screenshot_slide(html_file, aspect_ratio)
         if img_bytes:
@@ -423,8 +474,10 @@ INSPECT_SLIDE_SPEC = {
         "name": "inspect_slide",
         "description": (
             "Validate an HTML slide file after generation. "
-            "Checks structure, fixed body size, and common issues. "
-            "Call this immediately after writing each slide HTML file."
+            "Checks structure, fixed body size, bare text, and runs DOM validation "
+            "(overflow and overlap detection) to catch issues that cause text to overlap in PowerPoint. "
+            "Call this immediately after writing each slide HTML file. "
+            "Fix all reported issues before proceeding to the next slide."
         ),
         "parameters": {
             "type": "object",
