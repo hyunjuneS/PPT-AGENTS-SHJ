@@ -230,6 +230,58 @@ WRITE_FILE_SPEC = {
 }
 
 
+# ── edit_file ─────────────────────────────────────────────────────────────────
+
+def edit_file(path: str, old_str: str, new_str: str) -> str:
+    """
+    Replace the first occurrence of old_str with new_str in a file.
+    Raises if old_str is not found or is ambiguous (multiple matches).
+    """
+    p = Path(path)
+    assert p.exists(), f"File not found: {path}"
+    content = p.read_text(encoding="utf-8")
+    count = content.count(old_str)
+    assert count > 0, f"old_str not found in {path}"
+    assert count == 1, (
+        f"old_str matches {count} locations in {path} — make it more specific"
+    )
+    new_content = content.replace(old_str, new_str, 1)
+    p.write_text(new_content, encoding="utf-8")
+    delta = len(new_str) - len(old_str)
+    return f"Edited {path}: replaced 1 occurrence (size delta {delta:+d} chars)"
+
+
+EDIT_FILE_SPEC = {
+    "type": "function",
+    "function": {
+        "name": "edit_file",
+        "description": (
+            "Replace an exact string in a file with new content. "
+            "old_str must appear exactly once — use read_file first to find the unique context. "
+            "Prefer this over write_file when making targeted edits."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Absolute path to the file.",
+                },
+                "old_str": {
+                    "type": "string",
+                    "description": "The exact string to replace. Must appear exactly once in the file.",
+                },
+                "new_str": {
+                    "type": "string",
+                    "description": "The string to substitute in place of old_str.",
+                },
+            },
+            "required": ["path", "old_str", "new_str"],
+        },
+    },
+}
+
+
 # ── execute_command ───────────────────────────────────────────────────────────
 
 async def execute_command(command: str, timeout: int = 30) -> str:
@@ -451,6 +503,7 @@ ALL_TOOLS: dict[str, tuple[dict, object]] = {
     "finalize":           (FINALIZE_SPEC,          finalize),
     "read_file":          (READ_FILE_SPEC,          read_file),
     "write_file":         (WRITE_FILE_SPEC,         write_file),
+    "edit_file":          (EDIT_FILE_SPEC,          edit_file),
     "execute_command":    (EXECUTE_COMMAND_SPEC,    execute_command),
     "inspect_manuscript": (INSPECT_MANUSCRIPT_SPEC, inspect_manuscript),
     "inspect_slide":      (INSPECT_SLIDE_SPEC,      inspect_slide),
