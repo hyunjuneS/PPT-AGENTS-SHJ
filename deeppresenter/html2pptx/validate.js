@@ -27,36 +27,32 @@ const args = require('minimist')(process.argv.slice(2));
 
     const issues = await page.evaluate(() => {
       const found = [];
+      const MAX_ISSUES = 8;
 
-      // ── 1. Overflow detection ────────────────────────────────────────────────
-      // overflow:hidden 컨테이너에서 실제 내용물(scrollHeight)이
-      // 가시 높이(clientHeight)를 초과하면 PPT에서 텍스트가 튀어나와 겹침 발생.
+      // 1. Overflow detection
+      // overflow:hidden 컨테이너에서 scrollHeight > clientHeight 이면
+      // PPT에서 잘렸던 텍스트가 아래로 튀어나와 겹침 발생.
       document.querySelectorAll('*').forEach(el => {
+        if (found.length >= MAX_ISSUES) return;
         const s = window.getComputedStyle(el);
-        const isHidden = s.overflow === 'hidden' || s.overflowY === 'hidden';
-        if (!isHidden) return;
+        if (s.overflow !== 'hidden' && s.overflowY !== 'hidden') return;
 
         const scrollH = el.scrollHeight;
         const clientH = el.clientHeight;
-        // 2px 이상 차이 시 오류 (렌더링 소수점 오차 무시)
-        if (scrollH <= clientH + 2) return;
+        if (scrollH <= clientH + 2) return;  // 2px 이내 오차 무시
 
         const tag = el.tagName.toLowerCase();
         const cls = el.className && typeof el.className === 'string'
-          ? el.className.trim().split(/\s+/)[0]
-          : '';
-        const label = cls ? `${tag}.${cls}` : tag;
-
+          ? el.className.trim().split(/\s+/)[0] : '';
         found.push({
           type: 'overflow',
-          element: label,
-          detail: `content height ${scrollH}px exceeds container ${clientH}px — text will overflow in PPT (add ${scrollH - clientH}px to height)`,
+          element: cls ? `${tag}.${cls}` : tag,
+          detail: `content ${scrollH}px > container ${clientH}px — add ${scrollH - clientH}px to height`,
         });
       });
 
-      // ── 2. Overlap detection ─────────────────────────────────────────────────
-      // position:absolute/fixed 요소들의 bounding box 교차 여부 확인.
-      // 2px 이상 겹치면 PPT에서도 겹침.
+      // 2. Overlap detection
+      // position:absolute 요소들 중 부모-자식 관계가 아닌 것끼리 bounding box 교차 확인.
       const positioned = [];
       document.querySelectorAll('*').forEach(el => {
         const s = window.getComputedStyle(el);
@@ -65,22 +61,25 @@ const args = require('minimist')(process.argv.slice(2));
         if (r.width <= 0 || r.height <= 0) return;
         const tag = el.tagName.toLowerCase();
         const cls = el.className && typeof el.className === 'string'
-          ? el.className.trim().split(/\s+/)[0]
-          : '';
-        positioned.push({ label: cls ? `${tag}.${cls}` : tag, r });
+          ? el.className.trim().split(/\s+/)[0] : '';
+        positioned.push({ el, label: cls ? `${tag}.${cls}` : tag, r });
       });
 
-      for (let i = 0; i < positioned.length; i++) {
-        for (let j = i + 1; j < positioned.length; j++) {
-          const a = positioned[i].r;
-          const b = positioned[j].r;
+      for (let i = 0; i < positioned.length && found.length < MAX_ISSUES; i++) {
+        for (let j = i + 1; j < positioned.length && found.length < MAX_ISSUES; j++) {
+          const A = positioned[i];
+          const B = positioned[j];
+          // 부모-자식 관계는 의도적 중첩이므로 skip
+          if (A.el.contains(B.el) || B.el.contains(A.el)) continue;
+
+          const a = A.r, b = B.r;
           const ox = Math.min(a.right, b.right) - Math.max(a.left, b.left);
           const oy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
           if (ox > 2 && oy > 2) {
             found.push({
               type: 'overlap',
-              element: `${positioned[i].label} & ${positioned[j].label}`,
-              detail: `overlap ${Math.round(ox)}×${Math.round(oy)}px at (${Math.round(Math.max(a.left, b.left))}, ${Math.round(Math.max(a.top, b.top))})`,
+              element: `${A.label} & ${B.label}`,
+              detail: `overlap ${Math.round(ox)}x${Math.round(oy)}px at (${Math.round(Math.max(a.left, b.left))}, ${Math.round(Math.max(a.top, b.top))})`,
             });
           }
         }
