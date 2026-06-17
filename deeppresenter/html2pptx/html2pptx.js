@@ -1204,6 +1204,7 @@ async function extractSlideData(page) {
 
     const elements = [];
     const placeholders = [];
+    const charts = [];
     const textTags = ['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'LI'];
     const CONTAINER_TAGS = new Set(['DIV', 'HEADER', 'FOOTER', 'SECTION', 'ARTICLE', 'MAIN', 'NAV', 'ASIDE']);
     const processed = new Set();
@@ -1559,6 +1560,30 @@ async function extractSlideData(page) {
           });
         }
         processed.add(el);
+        return;
+      }
+
+      // Native PPTX chart via data-chart-type attribute
+      if (el.dataset && el.dataset.chartType) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          try {
+            charts.push({
+              type:   el.dataset.chartType,
+              labels: JSON.parse(el.dataset.chartLabels  || '[]'),
+              series: JSON.parse(el.dataset.chartSeries  || '[]'),
+              colors: JSON.parse(el.dataset.chartColors  || '[]'),
+              barDir: el.dataset.chartBardir || 'col',
+              x: pxToInch(rect.left),
+              y: pxToInch(rect.top),
+              w: pxToInch(rect.width),
+              h: pxToInch(rect.height),
+            });
+          } catch (e) {
+            errors.push(`Chart "${el.id || 'unnamed'}": invalid JSON in data-chart-* attributes — ${e.message}`);
+          }
+        }
+        markProcessed(el);
         return;
       }
 
@@ -2821,7 +2846,7 @@ async function extractSlideData(page) {
       processed.add(el);
     });
 
-    return { background, elements, placeholders, errors };
+    return { background, elements, placeholders, charts, errors };
   });
 }
 
@@ -2995,6 +3020,30 @@ async function html2pptx(htmlFile, pres, options = {}) {
 
     await addBackground(slideData, targetSlide, tmpDir);
     addElements(slideData, targetSlide, pres, soft);
+
+    // Inject native PPTX charts from data-chart-* elements
+    const CHART_MAP = {
+      bar:      pres.charts.BAR,
+      line:     pres.charts.LINE,
+      pie:      pres.charts.PIE,
+      doughnut: pres.charts.DOUGHNUT,
+      area:     pres.charts.AREA,
+    };
+    for (const c of (slideData.charts || [])) {
+      const chartType = CHART_MAP[c.type.toLowerCase()] ?? pres.charts.BAR;
+      const seriesData = c.series.map(s => ({
+        name:   s.name,
+        labels: c.labels,
+        values: s.values,
+      }));
+      targetSlide.addChart(chartType, seriesData, {
+        x: c.x, y: c.y, w: c.w, h: c.h,
+        barDir:      c.barDir,
+        chartColors: c.colors.length > 0 ? c.colors : undefined,
+        showLegend:  c.series.length > 1,
+        showValue:   true,
+      });
+    }
 
     return { slide: targetSlide, placeholders: slideData.placeholders };
   } catch (error) {

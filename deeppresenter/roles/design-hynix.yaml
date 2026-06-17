@@ -227,6 +227,45 @@ system:
 
     ---
 
+    ## 차트 (네이티브 PPT 차트 — 이미지·SVG 금지)
+
+    막대·꺾은선·원형 차트가 필요할 때는 SVG, Canvas, div 막대로 직접 그리지 않습니다.
+    아래 HTML 형식을 사용하면 PowerPoint에서 데이터를 직접 편집할 수 있는 네이티브 차트로 자동 변환됩니다.
+
+    **지원 타입:** `bar`(세로막대) | `line`(꺾은선) | `pie`(원형) | `doughnut`(도넛)
+
+    **단일 시리즈 예시 (세로 막대):**
+    ```html
+    <div
+      data-chart-type="bar"
+      data-chart-labels='["Q1","Q2","Q3","Q4"]'
+      data-chart-series='[{"name":"2024 실적","values":[120,145,138,162]}]'
+      data-chart-colors='["1F3864"]'
+      data-chart-bardir="col"
+      style="position:absolute; left:64px; top:186px; width:576px; height:350px;">
+    </div>
+    ```
+
+    **복수 시리즈 (그룹 막대 / 꺾은선 비교):**
+    ```html
+    <div
+      data-chart-type="bar"
+      data-chart-labels='["2022","2023","2024"]'
+      data-chart-series='[{"name":"현재","values":[100,120,115]},{"name":"목표","values":[130,145,140]}]'
+      data-chart-colors='["D9D9D9","1F3864"]'
+      data-chart-bardir="col"
+      style="position:absolute; left:64px; top:186px; width:576px; height:350px;">
+    </div>
+    ```
+
+    **규칙:**
+    - `data-chart-labels`, `data-chart-series`는 유효한 JSON (속성값은 작은따옴표로 감싸기)
+    - `data-chart-colors`: `#` 없는 HEX 코드 (`1F3864`, `376092` 등), 시리즈 순서와 일치
+    - `style`에 반드시 `position:absolute` + 명시적 `width`/`height` 지정
+    - `<div>` 안에 자식 요소 없음 — 차트 영역에 SVG·Canvas·div 막대 병기 금지
+
+    ---
+
     ## 구조 및 시맨틱 (매우 중요)
 
     - 모든 텍스트는 반드시 `<p>`, `<h1>`~`<h6>`, `<li>`, `<span>` 중 하나로 감싸야 합니다.
@@ -461,6 +500,45 @@ system:
 
     Chart slides: chart on left, RIGHT side must have thorough written analysis (trends, rationale, implications).
     Icons: monochrome navy symbols (⊞ ◎ ✓ ▤ ⚙ ◉ ⬡ ⚡ etc.). Avoid color emojis.
+
+    ---
+
+    ## Charts (Native PPT Charts — No SVG/Images)
+
+    When bar, line, or pie charts are needed, do NOT draw them with SVG, Canvas, or div bars.
+    Use the HTML format below — it auto-converts to a natively editable PowerPoint chart.
+
+    **Supported types:** `bar` | `line` | `pie` | `doughnut`
+
+    **Single series (vertical bar):**
+    ```html
+    <div
+      data-chart-type="bar"
+      data-chart-labels='["Q1","Q2","Q3","Q4"]'
+      data-chart-series='[{"name":"FY2024","values":[120,145,138,162]}]'
+      data-chart-colors='["1F3864"]'
+      data-chart-bardir="col"
+      style="position:absolute; left:64px; top:186px; width:576px; height:350px;">
+    </div>
+    ```
+
+    **Multiple series (grouped bar / line comparison):**
+    ```html
+    <div
+      data-chart-type="bar"
+      data-chart-labels='["2022","2023","2024"]'
+      data-chart-series='[{"name":"Current","values":[100,120,115]},{"name":"Target","values":[130,145,140]}]'
+      data-chart-colors='["D9D9D9","1F3864"]'
+      data-chart-bardir="col"
+      style="position:absolute; left:64px; top:186px; width:576px; height:350px;">
+    </div>
+    ```
+
+    **Rules:**
+    - `data-chart-labels` and `data-chart-series` must be valid JSON (wrap attribute value in single quotes)
+    - `data-chart-colors`: HEX without `#` (`1F3864`, `376092`), matched to series order
+    - `style` must include `position:absolute` and explicit `width`/`height`
+    - No child elements inside the `<div>` — do not mix SVG/Canvas/div bars in the chart area
 
     ---
 
