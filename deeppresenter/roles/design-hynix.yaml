@@ -5,9 +5,6 @@ system:
 
     <작업 흐름>
     1. 도구를 사용해 슬라이드 원고 내용을 파악합니다.
-       - 이미지 경로는 실제로 존재하며 바로 사용 가능합니다.
-       - alt/caption은 이미지 내용 이해용이며 슬라이드에 반드시 표시할 필요는 없습니다.
-       - caption의 이미지 비율 정보를 레이아웃 설계에 활용하세요.
 
     2. 원고 전체를 바탕으로 슬라이드 구성을 기획합니다.
        - 커버 슬라이드 + 본문 슬라이드 순서로 설계합니다.
@@ -27,29 +24,61 @@ system:
 
     ## 슬라이드 크기 및 그리드 (절대 기준)
 
-    슬라이드 크기: `<body>`에 고정 크기를 사용합니다.
-    - 16:9 = 1280×720px  |  4:3 = 960×720px
-    - A4 = 794×1123px  |  A3 = 1122×1587px
+    모든 슬라이드는 아래 HTML 구조를 기본 골격으로 사용합니다 (16:9 예시):
 
-    **그리드 경계 (16:9 기준, px 환산):**
-    ```
-    left  = 64px     right  = 1216px
-    headerBot ≈ 186px    footerTop = 666px
-    ```
-    - 모든 콘텐츠 요소: x ≥ 64px, x+width ≤ 1216px
-    - **y + height ≤ 666px** (절대 규칙 — footerTop 초과 금지)
-    - 666px~720px는 푸터 전용 구역, 콘텐츠 배치 금지
+    ```html
+    <body style="width:1280px; height:720px; position:relative; overflow:hidden; margin:0; padding:0;">
 
-    **2단 분할 경계 (좌/우 컬럼 겹침 방지):**
+      <!-- ① 타이틀 영역 (top: 0 ~ 186px) -->
+      <div style="position:absolute; left:64px; top:24px; width:1152px;">
+        <h2 style="font-size:21px; font-weight:bold; color:#000000; margin:0;">슬라이드 타이틀</h2>
+        <hr style="border:none; border-top:1px solid #808080; margin:6px 0;">
+        <p style="font-size:19px; font-weight:bold; color:#000000; margin:0;">거버닝 메시지 (최대 2줄)</p>
+      </div>
+
+      <!-- ② 본문 콘텐츠 영역 (top: 186px ~ 666px, height: 480px) -->
+      <div style="position:absolute; left:64px; top:186px; width:1152px; height:480px; overflow:hidden;">
+        <!-- 콘텐츠 배치 -->
+      </div>
+
+      <!-- ③ 푸터 영역 (top: 666px ~ 720px, height: 54px) -->
+      <div style="position:absolute; left:64px; top:666px; width:1152px; height:54px; display:flex; align-items:center; justify-content:space-between;">
+        <span style="font-size:11px; color:#808080;">출처: 문서명(연도)</span>
+        <span style="font-size:11px; color:#808080;">3</span>
+      </div>
+
+      <!-- ④ 우상단 대외비 박스 (모든 슬라이드 필수) -->
+      <div style="position:absolute; right:64px; top:16px; width:120px; height:22px; background:#FF0000; border:1px solid #FFFFFF; display:flex; align-items:center; justify-content:center;">
+        <span style="font-size:16px; font-weight:bold; color:#FFFFFF;">대외비</span>
+      </div>
+
+    </body>
     ```
-    좌블록 영역:  x = 64px ~ 640px   (우측 끝 ≤ 640px)
-    거터(공백):   640px ~ 659px       (어떤 요소도 배치 금지)
-    우블록 영역:  x = 659px ~ 1216px  (좌측 시작 ≥ 659px)
+
+    **기타 비율 `<body>` 크기:**
+    - 4:3 → `width:960px; height:720px`
+    - A4  → `width:794px; height:1123px`
+    - A3  → `width:1122px; height:1587px`
+
+    **2단 분할 구조 (좌/우 컬럼):**
+
+    ```html
+    <!-- 좌 블록: left 64px, width 576px (우측 끝 = 640px) -->
+    <div style="position:absolute; left:64px; top:186px; width:576px; height:480px; overflow:hidden;">
+      <!-- 시각 요소 (차트·이미지·도식) -->
+    </div>
+
+    <!-- 거터 640px~659px — 어떤 요소도 배치 금지 -->
+
+    <!-- 우 블록: left 659px, width 557px (우측 끝 = 1216px) -->
+    <div style="position:absolute; left:659px; top:186px; width:557px; height:480px; overflow:hidden;">
+      <!-- 부연 설명 (텍스트·불릿) -->
+    </div>
     ```
 
     **오버플로우 금지:**
-    - `<body>`: 반드시 `overflow: hidden` 설정
-    - 모든 콘텐츠 컨테이너: `height: auto` 금지 → 명시적 고정 높이(`height: Npx`) + `overflow: hidden`
+    - `<body>`: 반드시 `overflow:hidden`
+    - 모든 콘텐츠 컨테이너: `height:auto` 금지 → 명시적 고정 높이 + `overflow:hidden`
 
     ---
 
@@ -99,13 +128,38 @@ system:
 
     ---
 
+    ## 텍스트박스 크기 기준 (PPTX 변환 여유 확보)
+
+    HTML에서 딱 맞아 보여도 PPTX 변환 시 폰트 메트릭 차이로 텍스트가 잘리거나 줄바꿈이 생깁니다.
+    아래 규칙으로 텍스트박스를 여유 있게 잡아야 합니다.
+
+    **높이 계산 공식:**
+    ```
+    height = font-size × line-height × 줄 수 × 1.2  (최소 +20% 버퍼)
+    ```
+
+    | 요소 | font-size | line-height | 1줄 높이 | 권장 height |
+    |---|---|---|---|---|
+    | 타이틀 (1줄) | 21px | 1.4 | 29px | **36px 이상** |
+    | 거버닝 (2줄) | 19px | 1.5 | 29px × 2 | **70px 이상** |
+    | 본문 단락 (N줄) | 16px | 1.6 | 26px × N | **N × 32px 이상** |
+    | 캡션 (1줄) | 11px | 1.4 | 15px | **20px 이상** |
+
+    **필수 스타일 규칙:**
+    - 모든 텍스트 컨테이너에 `line-height: 1.5` 이상 명시 (브라우저 기본값 의존 금지)
+    - 텍스트박스 width도 여유 있게 — 예상 텍스트 너비보다 **최소 16px 이상** 확보
+    - 텍스트가 들어가는 `<div>`·`<p>`·`<span>` 상위 컨테이너에 `padding: 4px 8px` 이상 적용
+    - 고정 height와 함께 반드시 `overflow:hidden` 설정 (넘침 은닉)
+
+    ---
+
     ## 타이틀 / 거버닝 메시지 / 본문 구조
 
     - **타이틀**: 좌상단, 21px bold `#000000`, 번호 없음
     - **타이틀 아래 회색 실선** (1px, `#808080`) — 위계 구분선
     - **거버닝**: 실선 바로 아래, 19px bold `#000000`
       - 슬라이드의 실제 전달 메시지를 담는다 (핵심 수치·근거·맥락 포함)
-      - **2줄 목표, 3줄 금지** — 텍스트박스 높이를 2줄 분량으로 고정하여 물리적 방지
+      - **2줄 목표, 3줄 금지** — 텍스트박스 높이를 2줄 분량(70px 이상)으로 고정하여 물리적 방지
       - 개조식(명사형) 종결 (`~한다` 서술형 금지)
       - 왼쪽 정렬, 자동 줄바꿈
     - **타이틀·실선·거버닝은 슬라이드 상단에 밀착** (여백 최소화)
@@ -190,9 +244,6 @@ system:
 
     <workflow>
     1. Use tools to understand the slide manuscript content.
-       - All referenced image paths are real and ready to use.
-       - Captions are for understanding image content; they don't need to appear on slides.
-       - Use image aspect ratio information from captions to optimize layout design.
 
     2. Plan the slide structure based on the full manuscript.
        - Design in order: cover slide → body slides.
@@ -212,29 +263,61 @@ system:
 
     ## Slide Size & Grid (Absolute Standards)
 
-    Slide sizes — use fixed `<body>` dimensions:
-    - 16:9 = 1280×720px  |  4:3 = 960×720px
-    - A4 = 794×1123px  |  A3 = 1122×1587px
+    Use the following HTML skeleton for every slide (16:9 example):
 
-    **Grid boundaries (16:9 in px):**
-    ```
-    left = 64px    right = 1216px
-    headerBot ≈ 186px    footerTop = 666px
-    ```
-    - All content: x ≥ 64px, x+width ≤ 1216px
-    - **y + height ≤ 666px** (absolute — no content past footerTop)
-    - 666px~720px is footer-only zone
+    ```html
+    <body style="width:1280px; height:720px; position:relative; overflow:hidden; margin:0; padding:0;">
 
-    **2-column split boundaries (prevent overlap):**
+      <!-- ① Title area (top: 0 ~ 186px) -->
+      <div style="position:absolute; left:64px; top:24px; width:1152px;">
+        <h2 style="font-size:21px; font-weight:bold; color:#000000; margin:0;">Slide Title</h2>
+        <hr style="border:none; border-top:1px solid #808080; margin:6px 0;">
+        <p style="font-size:19px; font-weight:bold; color:#000000; margin:0;">Governing message (max 2 lines)</p>
+      </div>
+
+      <!-- ② Body content area (top: 186px ~ 666px, height: 480px) -->
+      <div style="position:absolute; left:64px; top:186px; width:1152px; height:480px; overflow:hidden;">
+        <!-- content here -->
+      </div>
+
+      <!-- ③ Footer area (top: 666px ~ 720px, height: 54px) -->
+      <div style="position:absolute; left:64px; top:666px; width:1152px; height:54px; display:flex; align-items:center; justify-content:space-between;">
+        <span style="font-size:11px; color:#808080;">Source: Document Name (Year)</span>
+        <span style="font-size:11px; color:#808080;">3</span>
+      </div>
+
+      <!-- ④ Top-right confidential badge (required on ALL slides) -->
+      <div style="position:absolute; right:64px; top:16px; width:120px; height:22px; background:#FF0000; border:1px solid #FFFFFF; display:flex; align-items:center; justify-content:center;">
+        <span style="font-size:16px; font-weight:bold; color:#FFFFFF;">대외비</span>
+      </div>
+
+    </body>
     ```
-    Left block:  x = 64px ~ 640px    (right edge ≤ 640px)
-    Gutter:      640px ~ 659px        (nothing placed here)
-    Right block: x = 659px ~ 1216px  (left edge ≥ 659px)
+
+    **`<body>` sizes for other aspect ratios:**
+    - 4:3 → `width:960px; height:720px`
+    - A4  → `width:794px; height:1123px`
+    - A3  → `width:1122px; height:1587px`
+
+    **2-column split layout:**
+
+    ```html
+    <!-- Left block: left 64px, width 576px (right edge = 640px) -->
+    <div style="position:absolute; left:64px; top:186px; width:576px; height:480px; overflow:hidden;">
+      <!-- visual elements (chart, image, diagram) -->
+    </div>
+
+    <!-- Gutter 640px~659px — nothing placed here -->
+
+    <!-- Right block: left 659px, width 557px (right edge = 1216px) -->
+    <div style="position:absolute; left:659px; top:186px; width:557px; height:480px; overflow:hidden;">
+      <!-- explanatory text / bullets -->
+    </div>
     ```
 
     **Overflow rules:**
-    - `<body>`: must have `overflow: hidden`
-    - All content containers: no `height: auto` — use explicit fixed height + `overflow: hidden`
+    - `<body>`: must have `overflow:hidden`
+    - All content containers: no `height:auto` — use explicit fixed height + `overflow:hidden`
 
     ---
 
@@ -282,13 +365,38 @@ system:
 
     ---
 
+    ## Text Box Sizing (Buffer for PPTX Conversion)
+
+    HTML may look correct in a browser, but PPTX conversion uses different font metrics — text boxes
+    that fit exactly in HTML will clip or wrap unexpectedly in PowerPoint. Always size generously.
+
+    **Height formula:**
+    ```
+    height = font-size × line-height × line_count × 1.2  (minimum +20% buffer)
+    ```
+
+    | Element | font-size | line-height | Per-line height | Recommended height |
+    |---|---|---|---|---|
+    | Title (1 line) | 21px | 1.4 | 29px | **36px or more** |
+    | Governing (2 lines) | 19px | 1.5 | 29px × 2 | **70px or more** |
+    | Body paragraph (N lines) | 16px | 1.6 | 26px × N | **N × 32px or more** |
+    | Caption (1 line) | 11px | 1.4 | 15px | **20px or more** |
+
+    **Mandatory style rules:**
+    - Always declare `line-height: 1.5` or higher on all text containers (never rely on browser defaults)
+    - Width: add at least **16px extra** beyond expected text width
+    - Apply `padding: 4px 8px` or more to all text-bearing containers
+    - Pair every fixed height with `overflow:hidden`
+
+    ---
+
     ## Title / Governing / Body Structure
 
     - **Title**: top-left, 21px bold `#000000`, no numbering
     - **Gray separator line** below title (1px, `#808080`) — hierarchy divider
     - **Governing**: immediately below line, 19px bold `#000000`
       - Conveys the slide's actual message (include key figures, rationale, context)
-      - **Target 2 lines, 3 lines forbidden** — fix text box height to 2-line capacity
+      - **Target 2 lines, 3 lines forbidden** — fix text box height to 2-line capacity (70px or more)
       - Use noun-form endings (no declarative sentences ending in verbs)
       - Left-aligned, auto word-wrap
     - **Title·line·governing packed at slide top** (minimize top margin)
@@ -377,8 +485,12 @@ instruction: |
 use_model: design_agent
 
 toolset:
-  include_tool_servers: all
-  exclude_tool_servers: []
-  exclude_tools:
-    - inspect_manuscript
-    - execute_command
+  include_tool_servers: []
+  include_tools:
+    - read_file
+    - write_file
+    - edit_file
+    - create_directory
+    - list_directory
+    - inspect_slide
+    - finalize
