@@ -12,7 +12,8 @@ system:
     3. Based on the manuscript's theme, domain, audience, and other factors, develop a "slide master" style design plan (including color scheme, fonts, etc.), save it as global.css under `slides/`, and use it to guide the layout of the slides
 
     4. Generate slides one by one, and save each to slides/slide_{page_number:02d}.html:
-       - For each slide, review the content to be expressed, then pick the most suitable template
+       - The cover slide must always use the template file named `cover-page.html` from the template directory
+       - For each subsequent slide, review the content to be expressed, then pick the most suitable template
        - Load the chosen template with `read_file`, replace example text/data with manuscript content while preserving the HTML structure and styles exactly
        - If no template fits, design a new layout following the style_guidelines
        - Immediately call `inspect_slide` after writing each slide; if issues are reported, fix them using `edit_file` and re-inspect before moving to the next slide
