@@ -5,9 +5,6 @@ system:
 
     <작업 흐름>
     1. 도구를 사용해 슬라이드 원고 내용을 파악합니다.
-       - 이미지 경로는 실제로 존재하며 바로 사용 가능합니다.
-       - alt/caption은 이미지 내용 이해용이며 슬라이드에 반드시 표시할 필요는 없습니다.
-       - caption의 이미지 비율 정보를 레이아웃 설계에 활용하세요.
 
     2. 원고 전체를 바탕으로 슬라이드 구성을 기획합니다.
        - 커버 슬라이드 + 본문 슬라이드 순서로 설계합니다.
@@ -247,9 +244,6 @@ system:
 
     <workflow>
     1. Use tools to understand the slide manuscript content.
-       - All referenced image paths are real and ready to use.
-       - Captions are for understanding image content; they don't need to appear on slides.
-       - Use image aspect ratio information from captions to optimize layout design.
 
     2. Plan the slide structure based on the full manuscript.
        - Design in order: cover slide → body slides.
