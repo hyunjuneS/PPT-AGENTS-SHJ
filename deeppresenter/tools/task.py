@@ -230,9 +230,9 @@ WRITE_FILE_SPEC = {
 }
 
 
-# ── edit_block ────────────────────────────────────────────────────────────────
+# ── edit_file ─────────────────────────────────────────────────────────────────
 
-def edit_block(
+def edit_file(
     file_path: str,
     old_string: str,
     new_string: str,
@@ -260,10 +260,10 @@ def edit_block(
     )
 
 
-EDIT_BLOCK_SPEC = {
+EDIT_FILE_SPEC = {
     "type": "function",
     "function": {
-        "name": "edit_block",
+        "name": "edit_file",
         "description": (
             "Replace an exact string in a file with new content. "
             "old_string must match exactly expected_replacements times. "
@@ -585,7 +585,7 @@ ALL_TOOLS: dict[str, tuple[dict, object]] = {
     "finalize":           (FINALIZE_SPEC,          finalize),
     "read_file":          (READ_FILE_SPEC,          read_file),
     "write_file":         (WRITE_FILE_SPEC,         write_file),
-    "edit_block":         (EDIT_BLOCK_SPEC,         edit_block),
+    "edit_file":          (EDIT_FILE_SPEC,          edit_file),
     "create_directory":   (CREATE_DIRECTORY_SPEC,   create_directory),
     "list_directory":     (LIST_DIRECTORY_SPEC,     list_directory),
     "execute_command":    (EXECUTE_COMMAND_SPEC,    execute_command),

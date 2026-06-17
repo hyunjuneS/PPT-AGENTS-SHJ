@@ -87,7 +87,7 @@ toolset:
   include_tools:
     - read_file
     - write_file
-    - edit_block
+    - edit_file
     - create_directory
     - list_directory
     - inspect_slide
