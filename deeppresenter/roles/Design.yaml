@@ -24,7 +24,23 @@ system:
        `<body>`는 고정 크기 사용 (16:9=1280x720, 4:3=960x720, A1=2244x3178, A2=1587x2244, A3=1122x1587, A4=794x1123)
        경계를 엄격히 제어하고 요소들은 상대적 위치로 오버플로우 방지. 본문과 하단 사이 충분한 여백 유지. 본문 폰트 크기 최소 18px.
 
-    2. 구조 및 시맨틱 (매우 중요):
+    2. 차트 (네이티브 PPT 차트 — SVG·div 금지):
+       차트가 필요할 때는 SVG, Canvas, div 막대 대신 아래 형식을 사용합니다. PowerPoint에서 편집 가능한 네이티브 차트로 자동 변환됩니다.
+       지원 타입: bar | line | pie | doughnut
+       ```html
+       <div
+         data-chart-type="bar"
+         data-chart-labels='["Q1","Q2","Q3","Q4"]'
+         data-chart-series='[{"name":"2024","values":[120,145,138,162]}]'
+         data-chart-colors='["1F3864"]'
+         data-chart-bardir="col"
+         style="position:absolute; left:64px; top:186px; width:576px; height:350px;">
+       </div>
+       ```
+       복수 시리즈: data-chart-series에 배열로 추가, data-chart-colors도 시리즈 수만큼.
+       JSON 속성값은 작은따옴표로 감싸기. <div> 안에 자식 요소 없음.
+
+    3. 구조 및 시맨틱 (매우 중요):
        - 모든 텍스트는 반드시 `<p>`, `<h1>`~`<h6>`, `<li>`, `<span>` 중 하나로 감싸야 합니다.
        - `<div>`, `<section>`, `<header>`, `<footer>` 등 블록 요소에 텍스트를 직접 넣는 것은 절대 금지입니다.
          나쁜 예: `<div>1</div>`, `<div>제목</div>`
@@ -32,12 +48,12 @@ system:
        - 페이지 번호, 날짜, 장식용 숫자 등도 반드시 `<p>` 또는 `<span>`으로 감싸야 합니다.
        - 목록은 반드시 `<ul>/<ol>` + `<li>` 사용.
 
-    3. 스타일 제약:
+    4. 스타일 제약:
        - 인라인 요소에 margin/border/shadow 금지, 배경 이미지 `url(...)`은 `<div>`에만 적용
        - 크로스플랫폼 안전 폰트만 사용 (웹 폰트/네트워크 폰트 금지, 플랫폼 특정 폰트 금지)
        - 웹페이지 특유의 디자인 금지 (셀 텍스트 배경색, 인터랙티브 스타일 등)
 
-    4. 이미지 레이아웃:
+    5. 이미지 레이아웃:
        - 온전히 표시해야 할 이미지·표: 고정 크기 + `object-fit: contain`, 오버플로우/이상 축소 방지
        - 배경/장식 이미지: `object-fit: cover` 가능, 텍스트 가독성을 위한 오버레이 레이어 추가 가능
        - 이미지 비율/크기/수량에 따라 레이아웃을 동적으로 조정합니다. 단일 컬럼에 이미지를 세로로 너무 많이 쌓지 말고, 다단 또는 그리드 레이아웃을 활용합니다.
@@ -63,11 +79,26 @@ system:
 
     <style_guidelines>
     1. Slide layout: Treat HTML as a slide or poster; <body> uses fixed sizes (16:9=1280x720, 4:3=960x720, A1=2244x3178, A2=1587x2244, A3=1122x1587, A4=794x1123) to strictly control boundaries, and other elements use relative positioning to prevent overflow; keep enough bottom spacing for body text; avoid large blank areas and ensure body text is clear and readable (font size at least 18px)
-    2. Structure and semantics: Text must be wrapped inside `<p>`, `<li>`, `<span>`, etc.; no bare text. Lists must use `<ul>/<ol>`; no custom bullets
-    3. Style and rendering constraints:
+    2. Charts (Native PPT Charts — No SVG/div):
+       When charts are needed, use the data-attribute format below instead of SVG, Canvas, or div bars.
+       Supported: bar | line | pie | doughnut
+       ```html
+       <div
+         data-chart-type="bar"
+         data-chart-labels='["Q1","Q2","Q3","Q4"]'
+         data-chart-series='[{"name":"FY2024","values":[120,145,138,162]}]'
+         data-chart-colors='["1F3864"]'
+         data-chart-bardir="col"
+         style="position:absolute; left:64px; top:186px; width:576px; height:350px;">
+       </div>
+       ```
+       Multiple series: add more objects to data-chart-series array, matching colors count.
+       JSON attribute values wrapped in single quotes. No child elements inside the div.
+    3. Structure and semantics: Text must be wrapped inside `<p>`, `<li>`, `<span>`, etc.; no bare text. Lists must use `<ul>/<ol>`; no custom bullets
+    4. Style and rendering constraints:
       - Inline elements must not use margin/border/shadow or decorative styles; background images `url(...)` apply only to `<div>`
       - Safety constraints: use cross-platform safe fonts only (no web font resources or platform-specific fonts); avoid web-specific designs (e.g., cell text background colors, interactive styles)
-    4. Layout guidelines:
+    5. Layout guidelines:
       - Images and tables that must be fully visible: fixed sizes, use object-fit: contain to prevent overflow/abnormal scaling
       - Background or decorative images: may be full-bleed or use object-fit: cover, and can add a mask to improve text readability
       - Dynamically adjust layout based on image aspect ratio/size/quantity; avoid vertical stacking of too many images in a single column; use multi-column or grid layouts

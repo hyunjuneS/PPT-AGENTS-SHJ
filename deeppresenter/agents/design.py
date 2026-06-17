@@ -1,5 +1,8 @@
 from deeppresenter.agents.agent import Agent
+from deeppresenter.utils.constants import PACKAGE_DIR
 from deeppresenter.utils.typings import InputRequest
+
+_HYNIX_TEMPLATE_DIR = str(PACKAGE_DIR / "roles" / "templates" / "hynix")
 
 
 class Design(Agent):
@@ -12,6 +15,7 @@ class Design(Agent):
                 markdown_file=markdown_file,
                 prompt=req.designagent_prompt,
                 template_content=template_content,
+                template_dir=_HYNIX_TEMPLATE_DIR,
             )
             yield agent_message
 
