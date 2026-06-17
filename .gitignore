@@ -5,4 +5,4 @@ __pycache__/
 node_modules/
 
 # 로컬 전용 HTML 템플릿 (git 연동 없음 — 직접 관리)
-deeppresenter/roles/templates/hynix/
+deeppresenter/roles/templates/
