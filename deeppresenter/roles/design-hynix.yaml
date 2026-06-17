@@ -45,6 +45,19 @@ system:
       - Images and tables that must be fully visible: fixed sizes, use object-fit: contain to prevent overflow/abnormal scaling
       - Background or decorative images: may be full-bleed or use object-fit: cover, and can add a mask to improve text readability
       - Dynamically adjust layout based on image aspect ratio/size/quantity; avoid vertical stacking of too many images in a single column; use multi-column or grid layouts
+    6. Required UI elements on every slide:
+      - 대외비 badge: position top-right (`position:absolute; right:64px; top:16px`), red background (`#FF0000`), white bold text (`color:#FFFFFF; font-weight:bold`)
+        ```html
+        <div style="position:absolute;right:64px;top:16px;width:120px;height:22px;background:#FF0000;display:flex;align-items:center;justify-content:center;">
+          <span style="font-size:16px;font-weight:bold;color:#FFFFFF;line-height:1.4;">대외비</span>
+        </div>
+        ```
+      - Header divider `<hr>` below the slide title — use the following style exactly:
+        ```css
+        border: none;
+        border-top: 1px solid #808080;
+        margin: 12px -12px;
+        ```
     </style_guidelines>
 
 instruction: |
