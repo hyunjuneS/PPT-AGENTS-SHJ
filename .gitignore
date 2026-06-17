@@ -8,4 +8,4 @@ node_modules/
 deeppresenter/roles/templates/
 
 # 로컬 전용 role 파일
-deeppresenter/roles/design-hynix-shj.yaml
+deeppresenter/roles/templates/other/shj.yaml
