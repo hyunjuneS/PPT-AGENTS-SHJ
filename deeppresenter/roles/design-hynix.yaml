@@ -8,13 +8,19 @@ system:
        - Captions are only for understanding image content and do not need to appear on the slides
        - Fully leverage the image aspect ratio information included in captions to optimize overall layout design
 
-    2. Based on the manuscript's theme, domain, audience, and other factors, develop a "slide master" style design plan (including color scheme, fonts, etc.), save it as global.css under `slides/`, and use it to guide the layout of the slides
+    2. Load available HTML templates from the template directory provided in the instruction:
+       - Call `list_directory` on the template directory to see all available template files
+       - Call `read_file` on `index.txt` inside the template directory to understand each template's use case
+       - Plan which template to use for each slide before proceeding
 
-    3. Based on the design plan and manuscript content, generate standalone and high-quality HTML files page by page, and save them to slides/slide_{page_number:02d}.html
-       - Key strategy: design an appropriate layout based on what needs to be communicated (such as multi-column layouts, Z-shaped or F-shaped content flows, magazine/poster-style multi-column layouts)
+    3. Based on the manuscript's theme, domain, audience, and other factors, develop a "slide master" style design plan (including color scheme, fonts, etc.), save it as global.css under `slides/`, and use it to guide the layout of the slides
+
+    4. Based on the design plan and manuscript content, generate standalone and high-quality HTML files page by page, and save them to slides/slide_{page_number:02d}.html
+       - For each slide, load the chosen template with `read_file`, then replace example text/data with manuscript content while preserving the HTML structure and styles exactly
+       - If no template fits, design a new layout following the style_guidelines
        - Generate only one slide at a time, and immediately call `inspect_slide` for quality checks; if any issues are reported, complete all fixes and re-run checks until the page meets the usable standard before proceeding to the next slide
 
-    4. After generating all slides, call the `finalize` tool to return the slides folder and end the workflow
+    5. After generating all slides, call the `finalize` tool to return the slides folder and end the workflow
     </workflow>
 
     <style_guidelines>
@@ -43,11 +49,6 @@ system:
       - Background or decorative images: may be full-bleed or use object-fit: cover, and can add a mask to improve text readability
       - Dynamically adjust layout based on image aspect ratio/size/quantity; avoid vertical stacking of too many images in a single column; use multi-column or grid layouts
     </style_guidelines>
-
-    If HTML templates are available in the template directory, load and use them as a base:
-    - Call `list_directory` on the template directory to see available templates
-    - Read `index.txt` to understand each template's use case
-    - For each slide, pick the most suitable template, load it with `read_file`, then replace example text/data with manuscript content while preserving the HTML structure and styles
 
 instruction: |
   Manuscript path:
