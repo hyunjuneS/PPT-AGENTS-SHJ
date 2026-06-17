@@ -27,29 +27,61 @@ system:
 
     ## 슬라이드 크기 및 그리드 (절대 기준)
 
-    슬라이드 크기: `<body>`에 고정 크기를 사용합니다.
-    - 16:9 = 1280×720px  |  4:3 = 960×720px
-    - A4 = 794×1123px  |  A3 = 1122×1587px
+    모든 슬라이드는 아래 HTML 구조를 기본 골격으로 사용합니다 (16:9 예시):
 
-    **그리드 경계 (16:9 기준, px 환산):**
-    ```
-    left  = 64px     right  = 1216px
-    headerBot ≈ 186px    footerTop = 666px
-    ```
-    - 모든 콘텐츠 요소: x ≥ 64px, x+width ≤ 1216px
-    - **y + height ≤ 666px** (절대 규칙 — footerTop 초과 금지)
-    - 666px~720px는 푸터 전용 구역, 콘텐츠 배치 금지
+    ```html
+    <body style="width:1280px; height:720px; position:relative; overflow:hidden; margin:0; padding:0;">
 
-    **2단 분할 경계 (좌/우 컬럼 겹침 방지):**
+      <!-- ① 타이틀 영역 (top: 0 ~ 186px) -->
+      <div style="position:absolute; left:64px; top:24px; width:1152px;">
+        <h2 style="font-size:21px; font-weight:bold; color:#000000; margin:0;">슬라이드 타이틀</h2>
+        <hr style="border:none; border-top:1px solid #808080; margin:6px 0;">
+        <p style="font-size:19px; font-weight:bold; color:#000000; margin:0;">거버닝 메시지 (최대 2줄)</p>
+      </div>
+
+      <!-- ② 본문 콘텐츠 영역 (top: 186px ~ 666px, height: 480px) -->
+      <div style="position:absolute; left:64px; top:186px; width:1152px; height:480px; overflow:hidden;">
+        <!-- 콘텐츠 배치 -->
+      </div>
+
+      <!-- ③ 푸터 영역 (top: 666px ~ 720px, height: 54px) -->
+      <div style="position:absolute; left:64px; top:666px; width:1152px; height:54px; display:flex; align-items:center; justify-content:space-between;">
+        <span style="font-size:11px; color:#808080;">출처: 문서명(연도)</span>
+        <span style="font-size:11px; color:#808080;">3</span>
+      </div>
+
+      <!-- ④ 우상단 대외비 박스 (모든 슬라이드 필수) -->
+      <div style="position:absolute; right:64px; top:16px; width:120px; height:22px; background:#FF0000; border:1px solid #FFFFFF; display:flex; align-items:center; justify-content:center;">
+        <span style="font-size:16px; font-weight:bold; color:#FFFFFF;">대외비</span>
+      </div>
+
+    </body>
     ```
-    좌블록 영역:  x = 64px ~ 640px   (우측 끝 ≤ 640px)
-    거터(공백):   640px ~ 659px       (어떤 요소도 배치 금지)
-    우블록 영역:  x = 659px ~ 1216px  (좌측 시작 ≥ 659px)
+
+    **기타 비율 `<body>` 크기:**
+    - 4:3 → `width:960px; height:720px`
+    - A4  → `width:794px; height:1123px`
+    - A3  → `width:1122px; height:1587px`
+
+    **2단 분할 구조 (좌/우 컬럼):**
+
+    ```html
+    <!-- 좌 블록: left 64px, width 576px (우측 끝 = 640px) -->
+    <div style="position:absolute; left:64px; top:186px; width:576px; height:480px; overflow:hidden;">
+      <!-- 시각 요소 (차트·이미지·도식) -->
+    </div>
+
+    <!-- 거터 640px~659px — 어떤 요소도 배치 금지 -->
+
+    <!-- 우 블록: left 659px, width 557px (우측 끝 = 1216px) -->
+    <div style="position:absolute; left:659px; top:186px; width:557px; height:480px; overflow:hidden;">
+      <!-- 부연 설명 (텍스트·불릿) -->
+    </div>
     ```
 
     **오버플로우 금지:**
-    - `<body>`: 반드시 `overflow: hidden` 설정
-    - 모든 콘텐츠 컨테이너: `height: auto` 금지 → 명시적 고정 높이(`height: Npx`) + `overflow: hidden`
+    - `<body>`: 반드시 `overflow:hidden`
+    - 모든 콘텐츠 컨테이너: `height:auto` 금지 → 명시적 고정 높이 + `overflow:hidden`
 
     ---
 
@@ -212,29 +244,61 @@ system:
 
     ## Slide Size & Grid (Absolute Standards)
 
-    Slide sizes — use fixed `<body>` dimensions:
-    - 16:9 = 1280×720px  |  4:3 = 960×720px
-    - A4 = 794×1123px  |  A3 = 1122×1587px
+    Use the following HTML skeleton for every slide (16:9 example):
 
-    **Grid boundaries (16:9 in px):**
-    ```
-    left = 64px    right = 1216px
-    headerBot ≈ 186px    footerTop = 666px
-    ```
-    - All content: x ≥ 64px, x+width ≤ 1216px
-    - **y + height ≤ 666px** (absolute — no content past footerTop)
-    - 666px~720px is footer-only zone
+    ```html
+    <body style="width:1280px; height:720px; position:relative; overflow:hidden; margin:0; padding:0;">
 
-    **2-column split boundaries (prevent overlap):**
+      <!-- ① Title area (top: 0 ~ 186px) -->
+      <div style="position:absolute; left:64px; top:24px; width:1152px;">
+        <h2 style="font-size:21px; font-weight:bold; color:#000000; margin:0;">Slide Title</h2>
+        <hr style="border:none; border-top:1px solid #808080; margin:6px 0;">
+        <p style="font-size:19px; font-weight:bold; color:#000000; margin:0;">Governing message (max 2 lines)</p>
+      </div>
+
+      <!-- ② Body content area (top: 186px ~ 666px, height: 480px) -->
+      <div style="position:absolute; left:64px; top:186px; width:1152px; height:480px; overflow:hidden;">
+        <!-- content here -->
+      </div>
+
+      <!-- ③ Footer area (top: 666px ~ 720px, height: 54px) -->
+      <div style="position:absolute; left:64px; top:666px; width:1152px; height:54px; display:flex; align-items:center; justify-content:space-between;">
+        <span style="font-size:11px; color:#808080;">Source: Document Name (Year)</span>
+        <span style="font-size:11px; color:#808080;">3</span>
+      </div>
+
+      <!-- ④ Top-right confidential badge (required on ALL slides) -->
+      <div style="position:absolute; right:64px; top:16px; width:120px; height:22px; background:#FF0000; border:1px solid #FFFFFF; display:flex; align-items:center; justify-content:center;">
+        <span style="font-size:16px; font-weight:bold; color:#FFFFFF;">대외비</span>
+      </div>
+
+    </body>
     ```
-    Left block:  x = 64px ~ 640px    (right edge ≤ 640px)
-    Gutter:      640px ~ 659px        (nothing placed here)
-    Right block: x = 659px ~ 1216px  (left edge ≥ 659px)
+
+    **`<body>` sizes for other aspect ratios:**
+    - 4:3 → `width:960px; height:720px`
+    - A4  → `width:794px; height:1123px`
+    - A3  → `width:1122px; height:1587px`
+
+    **2-column split layout:**
+
+    ```html
+    <!-- Left block: left 64px, width 576px (right edge = 640px) -->
+    <div style="position:absolute; left:64px; top:186px; width:576px; height:480px; overflow:hidden;">
+      <!-- visual elements (chart, image, diagram) -->
+    </div>
+
+    <!-- Gutter 640px~659px — nothing placed here -->
+
+    <!-- Right block: left 659px, width 557px (right edge = 1216px) -->
+    <div style="position:absolute; left:659px; top:186px; width:557px; height:480px; overflow:hidden;">
+      <!-- explanatory text / bullets -->
+    </div>
     ```
 
     **Overflow rules:**
-    - `<body>`: must have `overflow: hidden`
-    - All content containers: no `height: auto` — use explicit fixed height + `overflow: hidden`
+    - `<body>`: must have `overflow:hidden`
+    - All content containers: no `height:auto` — use explicit fixed height + `overflow:hidden`
 
     ---
 
@@ -377,8 +441,12 @@ instruction: |
 use_model: design_agent
 
 toolset:
-  include_tool_servers: all
-  exclude_tool_servers: []
-  exclude_tools:
-    - inspect_manuscript
-    - execute_command
+  include_tool_servers: []
+  include_tools:
+    - read_file
+    - write_file
+    - edit_file
+    - create_directory
+    - list_directory
+    - inspect_slide
+    - finalize
