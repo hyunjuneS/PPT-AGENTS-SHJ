@@ -6,22 +6,29 @@ system:
     <작업 흐름>
     1. 도구를 사용해 슬라이드 원고 내용을 파악합니다.
 
-    2. 원고 전체를 바탕으로 슬라이드 구성을 기획합니다.
+    2. 아래 제공된 템플릿 디렉토리에서 가용 템플릿 목록을 확인합니다.
+       - `list_directory(template_dir)` 로 파일 목록을 불러옵니다.
+       - `read_file(template_dir + "/index.txt")` 로 각 템플릿의 용도를 확인합니다.
+
+    3. 원고 전체를 바탕으로 슬라이드 구성을 기획합니다.
        - 커버 슬라이드 + 본문 슬라이드 순서로 설계합니다.
        - 한 슬라이드에는 하나의 메시지를 담습니다.
-       - 아래 제공된 HTML 템플릿 중 콘텐츠 성격에 가장 적합한 것을 선택합니다.
+       - 각 슬라이드에 가장 적합한 템플릿 파일명을 미리 정합니다.
 
-    3. `slides/global.css`를 먼저 작성합니다.
+    4. `slides/global.css`를 먼저 작성합니다.
        모든 슬라이드 HTML에서 `<link rel="stylesheet" href="global.css">`로 참조합니다.
        global.css 필수 선언:
        ```css
        body, *, html { font-family: 'Malgun Gothic', sans-serif; }
        ```
 
-    4. 슬라이드를 하나씩 `slides/slide_{페이지번호:02d}.html`에 생성하고 즉시 `inspect_slide`로 검사합니다.
+    5. 슬라이드를 하나씩 `slides/slide_{페이지번호:02d}.html`에 생성합니다.
+       - 해당 슬라이드에 선택한 템플릿 파일을 `read_file`로 불러옵니다.
+       - 템플릿의 HTML 구조·스타일은 그대로 유지하고, 예시 텍스트·수치만 원고 내용으로 교체합니다.
+       - 슬라이드 생성 후 즉시 `inspect_slide`로 검사합니다.
        - 문제가 보고되면 수정 후 재검사를 통과한 다음 페이지로 넘어갑니다.
 
-    5. 모든 슬라이드 생성 후 `finalize` 도구에 슬라이드 폴더 경로를 전달하여 작업을 종료합니다.
+    6. 모든 슬라이드 생성 후 `finalize` 도구에 슬라이드 폴더 경로를 전달하여 작업을 종료합니다.
     </작업 흐름>
 
     <공통 규칙>
@@ -33,345 +40,18 @@ system:
     - 모든 컨테이너에 `line-height:1.5` 이상 명시, `padding:4px 8px` 이상 적용
     - 색상: 배경 `#FFFFFF`, 메인 `#1F3864`, 보조 `#D9D9D9`/`#F2F2F2`/`#DEEAF6`, 액센트 `#376092`
     - 대외비 박스: 모든 슬라이드 우상단 필수
+    - 네이티브 차트: `data-chart-type` 속성 div 사용 (SVG·Canvas·div 막대 금지)
+      ```html
+      <div
+        data-chart-type="bar"
+        data-chart-labels='["Q1","Q2","Q3","Q4"]'
+        data-chart-series='[{"name":"2024","values":[120,145,138,162]}]'
+        data-chart-colors='["1F3864"]'
+        data-chart-bardir="col"
+        style="position:absolute; left:0; top:0; width:576px; height:400px;">
+      </div>
+      ```
     </공통 규칙>
-
-    <HTML 템플릿>
-
-    아래 템플릿들 중 콘텐츠에 맞는 것을 선택하고, 텍스트와 수치를 원고 내용으로 교체하여 사용합니다.
-
-    ─────────────────────────────────────
-    【Template 1】 커버 슬라이드
-    ─────────────────────────────────────
-    ```html
-    <!DOCTYPE html>
-    <html><head><meta charset="UTF-8"><link rel="stylesheet" href="global.css"></head>
-    <body style="width:1280px;height:720px;position:relative;overflow:hidden;margin:0;background:#FFFFFF;">
-
-      <!-- 대외비 -->
-      <div style="position:absolute;right:64px;top:16px;width:120px;height:22px;background:#FF0000;border:1px solid #FFFFFF;display:flex;align-items:center;justify-content:center;">
-        <span style="font-size:16px;font-weight:bold;color:#FFFFFF;line-height:1.4;">대외비</span>
-      </div>
-
-      <!-- 보고서 제목 -->
-      <div style="position:absolute;left:64px;top:260px;width:1152px;text-align:center;">
-        <h1 style="font-size:27px;font-weight:bold;color:#000000;margin:0;line-height:1.5;">SK하이닉스 AI 반도체 중장기 사업 전략</h1>
-        <hr style="border:none;border-top:2px solid #A6A6A6;margin:14px auto;width:720px;">
-      </div>
-
-      <!-- 조직명 -->
-      <div style="position:absolute;right:64px;bottom:48px;text-align:right;">
-        <p style="font-size:19px;font-weight:bold;color:#000000;margin:0;line-height:1.5;">전략기획팀</p>
-      </div>
-
-    </body></html>
-    ```
-
-    ─────────────────────────────────────
-    【Template 2】 불릿 리스트 슬라이드 (단일 컬럼)
-    ─────────────────────────────────────
-    ```html
-    <!DOCTYPE html>
-    <html><head><meta charset="UTF-8"><link rel="stylesheet" href="global.css"></head>
-    <body style="width:1280px;height:720px;position:relative;overflow:hidden;margin:0;background:#FFFFFF;">
-
-      <!-- 대외비 -->
-      <div style="position:absolute;right:64px;top:16px;width:120px;height:22px;background:#FF0000;border:1px solid #FFFFFF;display:flex;align-items:center;justify-content:center;">
-        <span style="font-size:16px;font-weight:bold;color:#FFFFFF;line-height:1.4;">대외비</span>
-      </div>
-
-      <!-- 타이틀 + 거버닝 -->
-      <div style="position:absolute;left:64px;top:24px;width:1100px;">
-        <h2 style="font-size:21px;font-weight:bold;color:#000000;margin:0;line-height:1.5;">추진 배경 및 핵심 과제</h2>
-        <hr style="border:none;border-top:1px solid #808080;margin:6px 0;">
-        <p style="font-size:19px;font-weight:bold;color:#000000;margin:0;height:70px;line-height:1.8;overflow:hidden;">HBM 수요 급증과 경쟁 심화로 공급망 전략 재정비가 시급하며, 2026년 이전 선제적 대응이 필요함</p>
-      </div>
-
-      <!-- 본문 불릿 -->
-      <div style="position:absolute;left:64px;top:186px;width:1152px;height:456px;overflow:hidden;">
-        <ul style="margin:0;padding:0 0 0 20px;list-style:none;">
-          <li style="font-size:16px;color:#000000;line-height:1.6;margin-bottom:12px;padding-left:16px;border-left:3px solid #1F3864;">
-            <span style="font-weight:bold;color:#1F3864;">HBM3E 수요 급증:</span>
-            <span> 2024년 HBM 시장 규모 전년 대비 2.4배 성장, AI 서버 탑재율 85% 돌파 예상</span>
-          </li>
-          <li style="font-size:16px;color:#000000;line-height:1.6;margin-bottom:12px;padding-left:16px;border-left:3px solid #1F3864;">
-            <span style="font-weight:bold;color:#1F3864;">경쟁사 동향:</span>
-            <span> 삼성전자 HBM4 양산 가속화, 마이크론 3분기 공급 확대로 점유율 경쟁 심화</span>
-          </li>
-          <li style="font-size:16px;color:#000000;line-height:1.6;margin-bottom:12px;padding-left:16px;border-left:3px solid #1F3864;">
-            <span style="font-weight:bold;color:#1F3864;">내부 역량 격차:</span>
-            <span> 후공정 캐파 부족으로 수주 기회 손실 추정 약 1.2조 원, 즉각적 설비 투자 검토 필요</span>
-          </li>
-          <li style="font-size:16px;color:#000000;line-height:1.6;margin-bottom:12px;padding-left:16px;border-left:3px solid #1F3864;">
-            <span style="font-weight:bold;color:#1F3864;">전략적 방향:</span>
-            <span> 핵심 고객 엔비디아·AMD 물량 우선 확보, 2025년 HBM4 샘플 출하 목표 설정</span>
-          </li>
-        </ul>
-      </div>
-
-      <!-- 푸터 -->
-      <div style="position:absolute;left:64px;top:666px;width:1152px;height:54px;display:flex;align-items:center;justify-content:space-between;">
-        <span style="font-size:11px;color:#808080;line-height:1.4;">출처: 사업전략보고서(2024)</span>
-        <span style="font-size:11px;color:#808080;line-height:1.4;">2</span>
-      </div>
-
-    </body></html>
-    ```
-
-    ─────────────────────────────────────
-    【Template 3】 2단 분할 슬라이드 (좌: 시각 / 우: 텍스트)
-    ─────────────────────────────────────
-    ```html
-    <!DOCTYPE html>
-    <html><head><meta charset="UTF-8"><link rel="stylesheet" href="global.css"></head>
-    <body style="width:1280px;height:720px;position:relative;overflow:hidden;margin:0;background:#FFFFFF;">
-
-      <!-- 대외비 -->
-      <div style="position:absolute;right:64px;top:16px;width:120px;height:22px;background:#FF0000;border:1px solid #FFFFFF;display:flex;align-items:center;justify-content:center;">
-        <span style="font-size:16px;font-weight:bold;color:#FFFFFF;line-height:1.4;">대외비</span>
-      </div>
-
-      <!-- 타이틀 + 거버닝 -->
-      <div style="position:absolute;left:64px;top:24px;width:1100px;">
-        <h2 style="font-size:21px;font-weight:bold;color:#000000;margin:0;line-height:1.5;">HBM 시장 성장률 및 당사 점유율 추이</h2>
-        <hr style="border:none;border-top:1px solid #808080;margin:6px 0;">
-        <p style="font-size:19px;font-weight:bold;color:#000000;margin:0;height:70px;line-height:1.8;overflow:hidden;">HBM 시장 CAGR 78%에도 당사 점유율은 정체 — 2025년 캐파 확대로 반전 목표</p>
-      </div>
-
-      <!-- 좌: 차트 영역 (64~640px) -->
-      <div style="position:absolute;left:64px;top:186px;width:576px;height:456px;overflow:hidden;">
-        <div
-          data-chart-type="bar"
-          data-chart-labels='["2021","2022","2023","2024E","2025E"]'
-          data-chart-series='[{"name":"시장 규모(억$)","values":[28,52,97,181,312]},{"name":"당사 점유율(%)","values":[52,54,50,48,55]}]'
-          data-chart-colors='["1F3864","376092"]'
-          data-chart-bardir="col"
-          style="position:absolute;left:0;top:0;width:576px;height:400px;">
-        </div>
-        <p style="position:absolute;bottom:0;left:0;font-size:11px;color:#808080;line-height:1.4;">* 2024~2025년은 내부 추정치</p>
-      </div>
-
-      <!-- 우: 설명 텍스트 (659~1216px) -->
-      <div style="position:absolute;left:659px;top:186px;width:557px;height:456px;overflow:hidden;">
-        <div style="margin-bottom:20px;">
-          <p style="font-size:14px;font-weight:bold;color:#1F3864;margin:0 0 6px 0;line-height:1.5;">▶ 시장 트렌드</p>
-          <p style="font-size:15px;color:#000000;margin:0;line-height:1.6;">AI 가속기 수요 증가로 HBM 시장은 2025년까지 연평균 78% 성장 전망. 엔비디아 H100/H200 탑재 확대가 핵심 동인</p>
-        </div>
-        <div style="margin-bottom:20px;">
-          <p style="font-size:14px;font-weight:bold;color:#1F3864;margin:0 0 6px 0;line-height:1.5;">▶ 당사 현황</p>
-          <p style="font-size:15px;color:#000000;margin:0;line-height:1.6;">2023년 점유율 50%로 전년 대비 4%p 하락. 후공정 병목이 주요 원인으로 경쟁사 대비 리드타임 3주 지연</p>
-        </div>
-        <div>
-          <p style="font-size:14px;font-weight:bold;color:#1F3864;margin:0 0 6px 0;line-height:1.5;">▶ 대응 방향</p>
-          <p style="font-size:15px;color:#000000;margin:0;line-height:1.6;">2025년 이천 후공정 라인 증설(+30%) 및 TC본딩 내재화로 점유율 55% 회복 목표</p>
-        </div>
-      </div>
-
-      <!-- 푸터 -->
-      <div style="position:absolute;left:64px;top:666px;width:1152px;height:54px;display:flex;align-items:center;justify-content:space-between;">
-        <span style="font-size:11px;color:#808080;line-height:1.4;">출처: 사업전략보고서(2024)</span>
-        <span style="font-size:11px;color:#808080;line-height:1.4;">3</span>
-      </div>
-
-    </body></html>
-    ```
-
-    ─────────────────────────────────────
-    【Template 4】 카드 3개 슬라이드 (항목 나열)
-    ─────────────────────────────────────
-    ```html
-    <!DOCTYPE html>
-    <html><head><meta charset="UTF-8"><link rel="stylesheet" href="global.css"></head>
-    <body style="width:1280px;height:720px;position:relative;overflow:hidden;margin:0;background:#FFFFFF;">
-
-      <!-- 대외비 -->
-      <div style="position:absolute;right:64px;top:16px;width:120px;height:22px;background:#FF0000;border:1px solid #FFFFFF;display:flex;align-items:center;justify-content:center;">
-        <span style="font-size:16px;font-weight:bold;color:#FFFFFF;line-height:1.4;">대외비</span>
-      </div>
-
-      <!-- 타이틀 + 거버닝 -->
-      <div style="position:absolute;left:64px;top:24px;width:1100px;">
-        <h2 style="font-size:21px;font-weight:bold;color:#000000;margin:0;line-height:1.5;">3대 전략 추진 방향</h2>
-        <hr style="border:none;border-top:1px solid #808080;margin:6px 0;">
-        <p style="font-size:19px;font-weight:bold;color:#000000;margin:0;height:70px;line-height:1.8;overflow:hidden;">기술 선도·고객 밀착·운영 효율화 세 축으로 2025년 HBM 시장 점유율 55% 달성 추진</p>
-      </div>
-
-      <!-- 카드 1 -->
-      <div style="position:absolute;left:64px;top:200px;width:348px;height:420px;background:#F2F2F2;border-radius:10px;box-shadow:0 2px 6px rgba(191,191,191,0.4);overflow:hidden;">
-        <div style="background:#1F3864;height:52px;display:flex;align-items:center;padding:0 20px;">
-          <p style="font-size:16px;font-weight:bold;color:#FFFFFF;margin:0;line-height:1.5;">① 기술 선도</p>
-        </div>
-        <div style="padding:20px;">
-          <p style="font-size:15px;font-weight:bold;color:#1F3864;margin:0 0 8px 0;line-height:1.5;">HBM4 조기 양산</p>
-          <p style="font-size:14px;color:#333333;margin:0 0 16px 0;line-height:1.6;">2025년 3분기 HBM4 초도 양산 및 엔비디아 B200 공급망 진입 목표. 12-Hi 스택 구조 세계 최초 적용</p>
-          <p style="font-size:15px;font-weight:bold;color:#1F3864;margin:0 0 8px 0;line-height:1.5;">R&D 투자 확대</p>
-          <p style="font-size:14px;color:#333333;margin:0;line-height:1.6;">2025년 연구개발비 전년 대비 18% 증액(약 4.2조 원), 차세대 패키징 기술 집중 투자</p>
-        </div>
-      </div>
-
-      <!-- 카드 2 -->
-      <div style="position:absolute;left:466px;top:200px;width:348px;height:420px;background:#F2F2F2;border-radius:10px;box-shadow:0 2px 6px rgba(191,191,191,0.4);overflow:hidden;">
-        <div style="background:#1F3864;height:52px;display:flex;align-items:center;padding:0 20px;">
-          <p style="font-size:16px;font-weight:bold;color:#FFFFFF;margin:0;line-height:1.5;">② 고객 밀착</p>
-        </div>
-        <div style="padding:20px;">
-          <p style="font-size:15px;font-weight:bold;color:#1F3864;margin:0 0 8px 0;line-height:1.5;">전략 고객 전담 조직</p>
-          <p style="font-size:14px;color:#333333;margin:0 0 16px 0;line-height:1.6;">엔비디아·AMD·구글 TPU 전담 KAM 배치, 분기별 로드맵 공유 및 공동 개발 협약 체결</p>
-          <p style="font-size:15px;font-weight:bold;color:#1F3864;margin:0 0 8px 0;line-height:1.5;">맞춤형 제품 개발</p>
-          <p style="font-size:14px;color:#333333;margin:0;line-height:1.6;">고객별 전력·대역폭 요구사항 반영한 커스텀 HBM 설계 역량 구축, 수주 리드타임 20% 단축 목표</p>
-        </div>
-      </div>
-
-      <!-- 카드 3 -->
-      <div style="position:absolute;left:868px;top:200px;width:348px;height:420px;background:#F2F2F2;border-radius:10px;box-shadow:0 2px 6px rgba(191,191,191,0.4);overflow:hidden;">
-        <div style="background:#1F3864;height:52px;display:flex;align-items:center;padding:0 20px;">
-          <p style="font-size:16px;font-weight:bold;color:#FFFFFF;margin:0;line-height:1.5;">③ 운영 효율화</p>
-        </div>
-        <div style="padding:20px;">
-          <p style="font-size:15px;font-weight:bold;color:#1F3864;margin:0 0 8px 0;line-height:1.5;">후공정 캐파 확대</p>
-          <p style="font-size:14px;color:#333333;margin:0 0 16px 0;line-height:1.6;">이천 M16 후공정 라인 +30% 증설(2025년 2분기 완공), TC본딩 내재화로 외주 의존도 40%→15% 감축</p>
-          <p style="font-size:15px;font-weight:bold;color:#1F3864;margin:0 0 8px 0;line-height:1.5;">수율 개선 프로그램</p>
-          <p style="font-size:14px;color:#333333;margin:0;line-height:1.6;">AI 기반 공정 모니터링 도입으로 HBM 수율 현 82%→90% 목표, 원가 절감 약 3,400억 원 효과</p>
-        </div>
-      </div>
-
-      <!-- 푸터 -->
-      <div style="position:absolute;left:64px;top:666px;width:1152px;height:54px;display:flex;align-items:center;justify-content:space-between;">
-        <span style="font-size:11px;color:#808080;line-height:1.4;">출처: 사업전략보고서(2024)</span>
-        <span style="font-size:11px;color:#808080;line-height:1.4;">4</span>
-      </div>
-
-    </body></html>
-    ```
-
-    ─────────────────────────────────────
-    【Template 5】 표 슬라이드
-    ─────────────────────────────────────
-    ```html
-    <!DOCTYPE html>
-    <html><head><meta charset="UTF-8"><link rel="stylesheet" href="global.css"></head>
-    <body style="width:1280px;height:720px;position:relative;overflow:hidden;margin:0;background:#FFFFFF;">
-
-      <!-- 대외비 -->
-      <div style="position:absolute;right:64px;top:16px;width:120px;height:22px;background:#FF0000;border:1px solid #FFFFFF;display:flex;align-items:center;justify-content:center;">
-        <span style="font-size:16px;font-weight:bold;color:#FFFFFF;line-height:1.4;">대외비</span>
-      </div>
-
-      <!-- 타이틀 + 거버닝 -->
-      <div style="position:absolute;left:64px;top:24px;width:1100px;">
-        <h2 style="font-size:21px;font-weight:bold;color:#000000;margin:0;line-height:1.5;">주요 경쟁사 HBM 역량 비교</h2>
-        <hr style="border:none;border-top:1px solid #808080;margin:6px 0;">
-        <p style="font-size:19px;font-weight:bold;color:#000000;margin:0;height:70px;line-height:1.8;overflow:hidden;">기술 성숙도와 캐파에서 당사가 우위나 수율·리드타임은 마이크론 대비 열위 — 즉각적 개선 필요</p>
-      </div>
-
-      <!-- 표 -->
-      <div style="position:absolute;left:64px;top:200px;width:1152px;height:440px;overflow:hidden;">
-        <table style="width:100%;border-collapse:collapse;font-size:15px;">
-          <thead>
-            <tr style="background:#1F3864;">
-              <th style="padding:12px 16px;color:#FFFFFF;font-weight:bold;text-align:left;width:180px;border:1px solid #2E4F8A;line-height:1.5;">구분</th>
-              <th style="padding:12px 16px;color:#FFFFFF;font-weight:bold;text-align:center;border:1px solid #2E4F8A;line-height:1.5;">SK하이닉스</th>
-              <th style="padding:12px 16px;color:#FFFFFF;font-weight:bold;text-align:center;border:1px solid #2E4F8A;line-height:1.5;">삼성전자</th>
-              <th style="padding:12px 16px;color:#FFFFFF;font-weight:bold;text-align:center;border:1px solid #2E4F8A;line-height:1.5;">마이크론</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr style="background:#FFFFFF;">
-              <td style="padding:12px 16px;font-weight:bold;color:#1F3864;border:1px solid #D9D9D9;line-height:1.5;">현재 세대</td>
-              <td style="padding:12px 16px;text-align:center;border:1px solid #D9D9D9;line-height:1.5;">HBM3E (양산중)</td>
-              <td style="padding:12px 16px;text-align:center;border:1px solid #D9D9D9;line-height:1.5;">HBM3E (양산중)</td>
-              <td style="padding:12px 16px;text-align:center;border:1px solid #D9D9D9;line-height:1.5;">HBM3E (양산중)</td>
-            </tr>
-            <tr style="background:#F2F2F2;">
-              <td style="padding:12px 16px;font-weight:bold;color:#1F3864;border:1px solid #D9D9D9;line-height:1.5;">월 캐파 (천개)</td>
-              <td style="padding:12px 16px;text-align:center;border:1px solid #D9D9D9;line-height:1.5;">320</td>
-              <td style="padding:12px 16px;text-align:center;border:1px solid #D9D9D9;line-height:1.5;">280</td>
-              <td style="padding:12px 16px;text-align:center;border:1px solid #D9D9D9;line-height:1.5;">180</td>
-            </tr>
-            <tr style="background:#FFFFFF;">
-              <td style="padding:12px 16px;font-weight:bold;color:#1F3864;border:1px solid #D9D9D9;line-height:1.5;">양산 수율</td>
-              <td style="padding:12px 16px;text-align:center;border:1px solid #D9D9D9;line-height:1.5;">82%</td>
-              <td style="padding:12px 16px;text-align:center;border:1px solid #D9D9D9;line-height:1.5;">78%</td>
-              <td style="padding:12px 16px;text-align:center;font-weight:bold;color:#376092;border:1px solid #D9D9D9;line-height:1.5;">88% ▲</td>
-            </tr>
-            <tr style="background:#F2F2F2;">
-              <td style="padding:12px 16px;font-weight:bold;color:#1F3864;border:1px solid #D9D9D9;line-height:1.5;">주요 고객</td>
-              <td style="padding:12px 16px;text-align:center;border:1px solid #D9D9D9;line-height:1.5;">NVIDIA, Google</td>
-              <td style="padding:12px 16px;text-align:center;border:1px solid #D9D9D9;line-height:1.5;">NVIDIA, AMD</td>
-              <td style="padding:12px 16px;text-align:center;border:1px solid #D9D9D9;line-height:1.5;">Microsoft, Meta</td>
-            </tr>
-            <tr style="background:#FFFFFF;">
-              <td style="padding:12px 16px;font-weight:bold;color:#1F3864;border:1px solid #D9D9D9;line-height:1.5;">차세대 일정</td>
-              <td style="padding:12px 16px;text-align:center;border:1px solid #D9D9D9;line-height:1.5;">HBM4 '25 Q3</td>
-              <td style="padding:12px 16px;text-align:center;border:1px solid #D9D9D9;line-height:1.5;">HBM4 '25 Q4</td>
-              <td style="padding:12px 16px;text-align:center;border:1px solid #D9D9D9;line-height:1.5;">HBM4 '26 Q1</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <!-- 푸터 -->
-      <div style="position:absolute;left:64px;top:666px;width:1152px;height:54px;display:flex;align-items:center;justify-content:space-between;">
-        <span style="font-size:11px;color:#808080;line-height:1.4;">출처: 사업전략보고서(2024)</span>
-        <span style="font-size:11px;color:#808080;line-height:1.4;">5</span>
-      </div>
-
-    </body></html>
-    ```
-
-    ─────────────────────────────────────
-    【Template 6】 숫자 콜아웃 카드 슬라이드 (핵심 지표)
-    ─────────────────────────────────────
-    ```html
-    <!DOCTYPE html>
-    <html><head><meta charset="UTF-8"><link rel="stylesheet" href="global.css"></head>
-    <body style="width:1280px;height:720px;position:relative;overflow:hidden;margin:0;background:#FFFFFF;">
-
-      <!-- 대외비 -->
-      <div style="position:absolute;right:64px;top:16px;width:120px;height:22px;background:#FF0000;border:1px solid #FFFFFF;display:flex;align-items:center;justify-content:center;">
-        <span style="font-size:16px;font-weight:bold;color:#FFFFFF;line-height:1.4;">대외비</span>
-      </div>
-
-      <!-- 타이틀 + 거버닝 -->
-      <div style="position:absolute;left:64px;top:24px;width:1100px;">
-        <h2 style="font-size:21px;font-weight:bold;color:#000000;margin:0;line-height:1.5;">2024년 HBM 사업 핵심 성과</h2>
-        <hr style="border:none;border-top:1px solid #808080;margin:6px 0;">
-        <p style="font-size:19px;font-weight:bold;color:#000000;margin:0;height:70px;line-height:1.8;overflow:hidden;">HBM3E 공급 확대와 수율 개선으로 매출·수익성 동반 성장, 글로벌 점유율 1위 유지</p>
-      </div>
-
-      <!-- 콜아웃 카드 3개 -->
-      <div style="position:absolute;left:64px;top:210px;width:348px;height:200px;background:#DEEAF6;border-radius:10px;box-shadow:0 2px 6px rgba(191,191,191,0.4);display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden;">
-        <p style="font-size:43px;font-weight:bold;color:#1F3864;margin:0;line-height:1.3;">52%</p>
-        <p style="font-size:15px;color:#1F3864;margin:4px 0 0 0;line-height:1.5;">글로벌 HBM 시장 점유율</p>
-        <p style="font-size:12px;color:#808080;margin:4px 0 0 0;line-height:1.4;">전년 대비 +2%p</p>
-      </div>
-
-      <div style="position:absolute;left:466px;top:210px;width:348px;height:200px;background:#DEEAF6;border-radius:10px;box-shadow:0 2px 6px rgba(191,191,191,0.4);display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden;">
-        <p style="font-size:43px;font-weight:bold;color:#1F3864;margin:0;line-height:1.3;">8.4조</p>
-        <p style="font-size:15px;color:#1F3864;margin:4px 0 0 0;line-height:1.5;">HBM 연간 매출 (원)</p>
-        <p style="font-size:12px;color:#808080;margin:4px 0 0 0;line-height:1.4;">전년 대비 +127%</p>
-      </div>
-
-      <div style="position:absolute;left:868px;top:210px;width:348px;height:200px;background:#DEEAF6;border-radius:10px;box-shadow:0 2px 6px rgba(191,191,191,0.4);display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden;">
-        <p style="font-size:43px;font-weight:bold;color:#1F3864;margin:0;line-height:1.3;">82%</p>
-        <p style="font-size:15px;color:#1F3864;margin:4px 0 0 0;line-height:1.5;">HBM3E 양산 수율</p>
-        <p style="font-size:12px;color:#808080;margin:4px 0 0 0;line-height:1.4;">전년 대비 +8%p (목표: 90%)</p>
-      </div>
-
-      <!-- 하단 설명 -->
-      <div style="position:absolute;left:64px;top:440px;width:1152px;height:200px;overflow:hidden;">
-        <p style="font-size:15px;color:#333333;line-height:1.7;margin:0;">HBM3E 24GB 제품의 엔비디아 H200 전량 공급 달성으로 시장 지위 공고화. 2025년 HBM4 전환과 함께 점유율 55% 이상 및 매출 12조 원 목표를 설정하며, 수율 개선 프로그램(YI-2025)을 통해 제조 원가 경쟁력 강화 추진.</p>
-      </div>
-
-      <!-- 푸터 -->
-      <div style="position:absolute;left:64px;top:666px;width:1152px;height:54px;display:flex;align-items:center;justify-content:space-between;">
-        <span style="font-size:11px;color:#808080;line-height:1.4;">출처: 사업전략보고서(2024)</span>
-        <span style="font-size:11px;color:#808080;line-height:1.4;">6</span>
-      </div>
-
-    </body></html>
-    ```
-
-    </HTML 템플릿>
 
 instruction: |
   슬라이드 원고 경로:
@@ -379,6 +59,9 @@ instruction: |
 
   사용자 요구사항:
   {{ prompt }}
+
+  HTML 템플릿 디렉토리:
+  {{ template_dir }}
 
 use_model: design_agent
 
