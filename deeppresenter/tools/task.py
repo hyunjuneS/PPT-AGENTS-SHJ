@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from deeppresenter.utils.constants import HEAVY_REFLECT, TOOL_CUTOFF_LEN
@@ -413,6 +414,13 @@ async def inspect_slide(
     if HEAVY_REFLECT:
         img_bytes = await _screenshot_slide(html_file, aspect_ratio)
         if img_bytes:
+            vlm_dir = path.parent / "vlm_input"
+            vlm_dir.mkdir(parents=True, exist_ok=True)
+            ts = int(time.time() * 1000)
+            save_path = vlm_dir / f"{path.stem}_{ts}.jpg"
+            save_path.write_bytes(img_bytes)
+            debug(f"VLM input image saved: {save_path}")
+
             b64 = base64.b64encode(img_bytes).decode()
             return [
                 {
