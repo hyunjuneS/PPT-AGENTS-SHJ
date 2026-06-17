@@ -15,7 +15,7 @@ system:
        - For each slide, review the content to be expressed, then pick the most suitable template
        - Load the chosen template with `read_file`, replace example text/data with manuscript content while preserving the HTML structure and styles exactly
        - If no template fits, design a new layout following the style_guidelines
-       - Immediately call `inspect_slide` after writing each slide; if issues are reported, fix and re-inspect before moving to the next slide
+       - Immediately call `inspect_slide` after writing each slide; if issues are reported, fix them using `edit_file` and re-inspect before moving to the next slide
 
     5. After generating all slides, call the `finalize` tool to return the slides folder and end the workflow
     </workflow>
