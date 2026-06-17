@@ -131,13 +131,38 @@ system:
 
     ---
 
+    ## 텍스트박스 크기 기준 (PPTX 변환 여유 확보)
+
+    HTML에서 딱 맞아 보여도 PPTX 변환 시 폰트 메트릭 차이로 텍스트가 잘리거나 줄바꿈이 생깁니다.
+    아래 규칙으로 텍스트박스를 여유 있게 잡아야 합니다.
+
+    **높이 계산 공식:**
+    ```
+    height = font-size × line-height × 줄 수 × 1.2  (최소 +20% 버퍼)
+    ```
+
+    | 요소 | font-size | line-height | 1줄 높이 | 권장 height |
+    |---|---|---|---|---|
+    | 타이틀 (1줄) | 21px | 1.4 | 29px | **36px 이상** |
+    | 거버닝 (2줄) | 19px | 1.5 | 29px × 2 | **70px 이상** |
+    | 본문 단락 (N줄) | 16px | 1.6 | 26px × N | **N × 32px 이상** |
+    | 캡션 (1줄) | 11px | 1.4 | 15px | **20px 이상** |
+
+    **필수 스타일 규칙:**
+    - 모든 텍스트 컨테이너에 `line-height: 1.5` 이상 명시 (브라우저 기본값 의존 금지)
+    - 텍스트박스 width도 여유 있게 — 예상 텍스트 너비보다 **최소 16px 이상** 확보
+    - 텍스트가 들어가는 `<div>`·`<p>`·`<span>` 상위 컨테이너에 `padding: 4px 8px` 이상 적용
+    - 고정 height와 함께 반드시 `overflow:hidden` 설정 (넘침 은닉)
+
+    ---
+
     ## 타이틀 / 거버닝 메시지 / 본문 구조
 
     - **타이틀**: 좌상단, 21px bold `#000000`, 번호 없음
     - **타이틀 아래 회색 실선** (1px, `#808080`) — 위계 구분선
     - **거버닝**: 실선 바로 아래, 19px bold `#000000`
       - 슬라이드의 실제 전달 메시지를 담는다 (핵심 수치·근거·맥락 포함)
-      - **2줄 목표, 3줄 금지** — 텍스트박스 높이를 2줄 분량으로 고정하여 물리적 방지
+      - **2줄 목표, 3줄 금지** — 텍스트박스 높이를 2줄 분량(70px 이상)으로 고정하여 물리적 방지
       - 개조식(명사형) 종결 (`~한다` 서술형 금지)
       - 왼쪽 정렬, 자동 줄바꿈
     - **타이틀·실선·거버닝은 슬라이드 상단에 밀착** (여백 최소화)
@@ -346,13 +371,38 @@ system:
 
     ---
 
+    ## Text Box Sizing (Buffer for PPTX Conversion)
+
+    HTML may look correct in a browser, but PPTX conversion uses different font metrics — text boxes
+    that fit exactly in HTML will clip or wrap unexpectedly in PowerPoint. Always size generously.
+
+    **Height formula:**
+    ```
+    height = font-size × line-height × line_count × 1.2  (minimum +20% buffer)
+    ```
+
+    | Element | font-size | line-height | Per-line height | Recommended height |
+    |---|---|---|---|---|
+    | Title (1 line) | 21px | 1.4 | 29px | **36px or more** |
+    | Governing (2 lines) | 19px | 1.5 | 29px × 2 | **70px or more** |
+    | Body paragraph (N lines) | 16px | 1.6 | 26px × N | **N × 32px or more** |
+    | Caption (1 line) | 11px | 1.4 | 15px | **20px or more** |
+
+    **Mandatory style rules:**
+    - Always declare `line-height: 1.5` or higher on all text containers (never rely on browser defaults)
+    - Width: add at least **16px extra** beyond expected text width
+    - Apply `padding: 4px 8px` or more to all text-bearing containers
+    - Pair every fixed height with `overflow:hidden`
+
+    ---
+
     ## Title / Governing / Body Structure
 
     - **Title**: top-left, 21px bold `#000000`, no numbering
     - **Gray separator line** below title (1px, `#808080`) — hierarchy divider
     - **Governing**: immediately below line, 19px bold `#000000`
       - Conveys the slide's actual message (include key figures, rationale, context)
-      - **Target 2 lines, 3 lines forbidden** — fix text box height to 2-line capacity
+      - **Target 2 lines, 3 lines forbidden** — fix text box height to 2-line capacity (70px or more)
       - Use noun-form endings (no declarative sentences ending in verbs)
       - Left-aligned, auto word-wrap
     - **Title·line·governing packed at slide top** (minimize top margin)
