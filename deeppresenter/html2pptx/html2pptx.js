@@ -648,9 +648,9 @@ function addElements(slideData, targetSlide, pres, soft = false) {
       let adjustedX = el.position.x;
       let adjustedW = el.position.w;
 
-      // Single-line text needs 2% width compensation for PowerPoint rendering accuracy
+      // Single-line text: 5% width expansion to prevent right-edge clipping in PowerPoint
       if (isSingleLine) {
-        const widthIncrease = el.position.w * 0.02;
+        const widthIncrease = el.position.w * 0.05;
         const align = el.style.align;
 
         if (align === 'center') {
@@ -664,11 +664,14 @@ function addElements(slideData, targetSlide, pres, soft = false) {
         }
       }
 
+      // 10% height buffer: PowerPoint font metrics differ from browser, causing bottom clipping
+      const adjustedH = el.position.h * 1.10;
+
       const textOptions = {
         x: adjustedX,
         y: el.position.y,
         w: adjustedW,
-        h: el.position.h,
+        h: adjustedH,
         fontSize: el.style.fontSize,
         fontFace: el.style.fontFace,
         color: el.style.color,
