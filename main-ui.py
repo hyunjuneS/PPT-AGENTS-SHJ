@@ -8,7 +8,6 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from agents.agent import Agent
 from agents.llms import AsyncLLM
 
 # .env 파일을 os.environ 에 주입. reload worker 재import 시에도 동일하게 적용된다.
@@ -40,8 +39,6 @@ _design_llm = AsyncLLM(
     timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
 )
 
-LLM_MAPPING: dict[str, AsyncLLM] = {"language": _llm}
-
 logger.info("LLM configured: research=%s  design=%s", _llm, _design_llm)
 
 
@@ -66,33 +63,6 @@ def _make_deep_config():
 @app.get("/health")
 async def health():
     return {"status": "ok", "model": _llm.model}
-
-
-@app.post("/analyze")
-async def analyze_markdown(file: UploadFile = File(...)):
-    """[pptagent] .md 파일을 doc_extractor 에이전트로 분석해 JSON 반환."""
-    if not file.filename or not file.filename.lower().endswith(".md"):
-        raise HTTPException(status_code=400, detail="Only .md files are accepted.")
-
-    raw = await file.read()
-    try:
-        markdown_text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
-
-    if not markdown_text.strip():
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-
-    logger.info("Analyzing file: %s (%d chars)", file.filename, len(markdown_text))
-    agent = Agent(name="doc_extractor", llm_mapping=LLM_MAPPING)
-
-    try:
-        turn_id, result = await agent(markdown_document=markdown_text)
-    except Exception as e:
-        logger.error("Agent error: %s", e)
-        raise HTTPException(status_code=500, detail=f"Agent failed: {e}")
-
-    return JSONResponse(content={"turn_id": turn_id, "result": result})
 
 
 @app.post("/research")
