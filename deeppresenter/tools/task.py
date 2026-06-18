@@ -15,17 +15,17 @@ from deeppresenter.utils.constants import HEAVY_REFLECT, TOOL_CUTOFF_LEN
 from deeppresenter.utils.log import debug, warning
 
 _SCREENSHOT_JS = Path(__file__).resolve().parents[1] / "html2pptx" / "screenshot.js"
-_DEFAULT_CHROMIUM = Path(
-    "/mnt/c/Users/X0160146/Desktop/26/playwright/chromium-1223/chrome-linux64/chrome"
-)
+# _DEFAULT_CHROMIUM = Path(
+#     "/mnt/c/Users/X0160146/Desktop/26/playwright/chromium-1223/chrome-linux64/chrome"
+# )
 
 
 def _get_chromium_executable() -> str | None:
     env_path = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")
     if env_path and Path(env_path).exists():
         return env_path
-    if _DEFAULT_CHROMIUM.exists():
-        return str(_DEFAULT_CHROMIUM)
+    # if _DEFAULT_CHROMIUM.exists():
+    #     return str(_DEFAULT_CHROMIUM)
     return None
 
 
