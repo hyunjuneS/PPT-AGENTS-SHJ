@@ -39,7 +39,12 @@ _design_llm = AsyncLLM(
     timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
 )
 
-logger.info("LLM configured: research=%s  design=%s", _llm, _design_llm)
+# PPT_LANGUAGE env — 설정 시 모든 엔드포인트의 language form param을 덮어씀
+# 값: "en" (영어) 또는 "ko" (한국어). 미설정 시 각 요청의 form param 사용.
+_LANGUAGE_OVERRIDE: str | None = os.environ.get("PPT_LANGUAGE") or None
+
+logger.info("LLM configured: research=%s  design=%s  language=%s",
+            _llm, _design_llm, _LANGUAGE_OVERRIDE or "(from request)")
 
 
 def _make_deep_config():
@@ -86,6 +91,8 @@ async def research(
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
 
+    effective_language = _LANGUAGE_OVERRIDE or language
+
     # 세션별 workspace 생성
     session_id = str(uuid.uuid4())[:8]
     workspace = WORKSPACE_BASE / session_id
@@ -98,10 +105,11 @@ async def research(
     req = InputRequest(
         instruction=instruction,
         attachments=[str(attachment_path)],
-        language=language,
+        language=effective_language,
     )
 
-    logger.info("[Research] session=%s instruction=%r", session_id, instruction[:80])
+    logger.info("[Research] session=%s lang=%s instruction=%r",
+                session_id, effective_language, instruction[:80])
 
     config = _make_deep_config()
     manuscript_path = None
@@ -109,7 +117,7 @@ async def research(
 
     try:
         async with AgentEnv(workspace) as env:
-            agent = Research(config=config, agent_env=env, workspace=workspace, language=language)
+            agent = Research(config=config, agent_env=env, workspace=workspace, language=effective_language)
             async for item in agent.loop(req):
                 if isinstance(item, str):
                     manuscript_path = item
@@ -195,6 +203,8 @@ async def design(
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
 
+    effective_language = _LANGUAGE_OVERRIDE or language
+
     session_id = str(uuid.uuid4())[:8]
     workspace = WORKSPACE_BASE / session_id
     workspace.mkdir(parents=True, exist_ok=True)
@@ -202,7 +212,7 @@ async def design(
     manuscript_path = workspace / file.filename
     manuscript_path.write_bytes(raw)
 
-    req = InputRequest(instruction=instruction, language=language)
+    req = InputRequest(instruction=instruction, language=effective_language)
 
     template_content = ""
     tmpl_path = os.environ.get("DESIGN_TEMPLATE_FILE")
@@ -211,8 +221,8 @@ async def design(
 
     config_file = os.environ.get("DESIGN_CONFIG_FILE") or None
 
-    logger.info("[Design] session=%s file=%s config=%s template=%s",
-                session_id, file.filename,
+    logger.info("[Design] session=%s lang=%s file=%s config=%s template=%s",
+                session_id, effective_language, file.filename,
                 Path(config_file).name if config_file else "Design.yaml",
                 bool(template_content))
 
@@ -222,7 +232,7 @@ async def design(
 
     try:
         async with AgentEnv(workspace) as env:
-            agent = Design(config=config, agent_env=env, workspace=workspace, language=language,
+            agent = Design(config=config, agent_env=env, workspace=workspace, language=effective_language,
                            config_file=config_file)
             async for item in agent.loop(req, markdown_file=str(manuscript_path), template_content=template_content):
                 if isinstance(item, str):

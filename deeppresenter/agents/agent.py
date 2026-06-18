@@ -50,7 +50,7 @@ class Agent:
         config: DeepPresenterConfig,
         agent_env: AgentEnv,
         workspace: Path,
-        language: Literal["zh", "en"] = "en",
+        language: Literal["ko", "en"] = "en",
         config_file: str | Path | None = None,
         keep_reasoning: bool = True,
         max_turns: int | None = None,
