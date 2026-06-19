@@ -7,7 +7,6 @@ from abc import abstractmethod
 from collections.abc import AsyncGenerator
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
 
 import yaml
 from jinja2 import Template
@@ -50,7 +49,7 @@ class Agent:
         config: DeepPresenterConfig,
         agent_env: AgentEnv,
         workspace: Path,
-        language: Literal["ko", "en"] = "en",
+        language: str = "en",
         config_file: str | Path | None = None,
         keep_reasoning: bool = True,
         max_turns: int | None = None,
