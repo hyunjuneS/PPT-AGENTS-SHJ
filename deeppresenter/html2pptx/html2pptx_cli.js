@@ -24,6 +24,7 @@ const fg       = require("fast-glob");
 const minimist = require("minimist");
 const pptxgen  = require("pptxgenjs");
 const html2pptx = require("./html2pptx");
+const { embedFontsInPptx } = require("./embed-fonts");
 
 // ---------------------------------------------------------------------------
 // 레이아웃 정의 (WSL 동일)
@@ -127,7 +128,25 @@ async function run() {
   if (!validateOnly) {
     const outputPath = path.resolve(outputFile);
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-    await pptx.writeFile({ fileName: outputPath });
+
+    // Auto-detect fonts/ directory: --fonts_dir arg > project-root fonts/ > skip
+    const fontsDir = args.fonts_dir
+      ? path.resolve(args.fonts_dir)
+      : (() => {
+          // Walk up from deeppresenter/html2pptx/ to find project-root/fonts/
+          const candidate = path.resolve(__dirname, "../../fonts");
+          return fs.existsSync(candidate) ? candidate : null;
+        })();
+
+    if (fontsDir) {
+      // Get PPTX as buffer, inject fonts, then write
+      const buf = await pptx.write({ outputType: "nodebuffer" });
+      const withFonts = await embedFontsInPptx(buf, fontsDir);
+      fs.writeFileSync(outputPath, withFonts);
+    } else {
+      await pptx.writeFile({ fileName: outputPath });
+    }
+
     console.log(`[html2pptx] Saved: ${outputPath}`);
   }
 }
