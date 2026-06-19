@@ -30,6 +30,23 @@ const args = require('minimist')(process.argv.slice(2));
     const page = await browser.newPage();
     await page.setViewportSize({ width, height });
     await page.goto(`file://${htmlFile}`, { waitUntil: 'networkidle' });
+    // Append Noto Sans CJK KR as a last-resort fallback on every element so Korean
+    // glyphs render even when the slide specifies a Latin-only font (e.g. Arial).
+    await page.evaluate(() => {
+      const faceStyle = document.createElement('style');
+      faceStyle.textContent =
+        "@font-face{font-family:'NotoKR';" +
+        "src:local('Noto Sans CJK KR'),local('NotoSansCJKkr-Regular'),local('NotoSansCJK-Regular');" +
+        "unicode-range:U+AC00-D7A3,U+1100-11FF,U+3130-318F;}";
+      document.head.appendChild(faceStyle);
+
+      document.querySelectorAll('*').forEach(el => {
+        const ff = window.getComputedStyle(el).fontFamily;
+        if (!ff.includes('NotoKR') && !ff.includes('Noto Sans CJK')) {
+          el.style.fontFamily = `${ff}, 'NotoKR'`;
+        }
+      });
+    });
     await page.screenshot({ path: outputFile, type: 'jpeg', quality: 85, fullPage: false });
     console.log(`Screenshot saved: ${outputFile}`);
   } finally {
