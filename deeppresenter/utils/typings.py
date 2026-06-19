@@ -91,7 +91,7 @@ class ToolSet(BaseModel):
 
 
 class RoleConfig(BaseModel):
-    system: dict[str, str]
+    system: str
     instruction: str
     use_model: str
     toolset: ToolSet = Field(default_factory=ToolSet)

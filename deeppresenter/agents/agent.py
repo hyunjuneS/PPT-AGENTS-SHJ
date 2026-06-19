@@ -92,10 +92,13 @@ class Agent:
 
         self._setup_toolset()
 
-        if language not in self.role_config.system:
-            language = "en"
+        self.system = self.role_config.system
+        _LANG_INSTRUCTION = {
+            "ko": "IMPORTANT: Write all output text content (slides, manuscripts) in Korean (한국어로 작성하세요).",
+            "en": "IMPORTANT: Write all output text content (slides, manuscripts) in English.",
+        }
+        self.system += f"\n\n{_LANG_INSTRUCTION.get(language, _LANG_INSTRUCTION['en'])}"
 
-        self.system = self.role_config.system[language]
         self.prompt: Template = Template(self.role_config.instruction, undefined=StrictUndefined)
 
         if any(t["function"]["name"] == "execute_command" for t in self.tools):
