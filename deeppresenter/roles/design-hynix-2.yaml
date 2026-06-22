@@ -58,7 +58,7 @@ instruction: |
 
   -------------------------------------------------------
   Fixed elements used on every slide (do not modify):
-  Only elements placed at the root `<body>` top level (body-top) are fixed.
+  Only elements placed at the root `<body>` top level (body-top) and bottom level (body-bot) are fixed.
   Do NOT add, remove, or modify these elements in any slide.
   -------------------------------------------------------
 
