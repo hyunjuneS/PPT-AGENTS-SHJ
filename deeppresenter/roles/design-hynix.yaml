@@ -24,10 +24,10 @@ system: |
   </workflow>
 
   <style_guidelines>
-  1. 모든 슬라이드는 16:9 (1280x720px) 크기를 반드시 준수한다. `<body>`는 `width:1280px; height:720px; overflow:hidden`으로 고정한다.
-  2. HTML 템플릿을 사용하되, 폰트 크기 및 도형(shape) 크기는 콘텐츠에 맞게 조정할 수 있다.
-  3. 특수 이모지 및 이모티콘은 사용하지 않는다.
-  4. 도형과 글자가 서로 겹치지 않도록 주의한다. 렌더링된 이미지가 입력으로 제공된 경우, 겹치는 문구나 도형이 없는지 반드시 확인한다.
+  1. All slides must strictly follow the 16:9 aspect ratio (1280x720px). Set `<body>` to `width:1280px; height:720px; overflow:hidden`.
+  2. Use the provided HTML templates. Font sizes and shape dimensions may be adjusted to fit the content.
+  3. Do not use special emojis or emoticons.
+  4. Ensure no shapes or text overlap each other. If a rendered slide image is provided as input, always verify that there are no overlapping text or shapes.
   </style_guidelines>
 
 instruction: |
