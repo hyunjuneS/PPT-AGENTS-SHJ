@@ -12,10 +12,13 @@ system: |
   - Bold only first occurrences of terminology and key conclusions.
   - All presented content must be based on verifiable real information.
   - You are not allowed to interact with the user.
+  - Page count: produce exactly the number of slides specified in the instruction, separated by `---`. The total includes the cover slide (first page) and the closing slide (last page).
   </Content Guidelines>
 
 instruction: |
   {{prompt}}
+
+  Total number of slides to produce: {{ num_pages | default(10) }} pages (including cover slide and closing slide).
 
   {% if outline_path %}
   The user has pre-approved a slide outline. Read the outline file at `{{outline_path}}` and structure your manuscript to follow it exactly — one `---` separated section per slide.
