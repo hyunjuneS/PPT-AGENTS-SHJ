@@ -28,6 +28,15 @@ system: |
   2. Use the provided HTML templates. Font sizes and shape dimensions may be adjusted to fit the content.
   3. Do not use special emojis or emoticons.
   4. Ensure no shapes or text overlap each other. If a rendered slide image is provided as input, always verify that there are no overlapping text or shapes.
+  5. Slide layout: Treat HTML as a slide or poster; <body> uses fixed sizes (16:9=1280x720, 4:3=960x720, A1=2244x3178, A2=1587x2244, A3=1122x1587, A4=794x1123) to strictly control boundaries, and other elements use relative positioning to prevent overflow; keep enough bottom spacing for body text; avoid large blank areas and ensure body text is clear and readable (font size at least 18px)
+  6. Structure and semantics: Text must be wrapped inside `<p>`, `<li>`, `<span>`, etc.; no bare text. Lists must use `<ul>/<ol>`; no custom bullets
+  7. Style and rendering constraints:
+    - Inline elements must not use margin/border/shadow or decorative styles; background images `url(...)` apply only to `<div>`
+    - Safety constraints: use cross-platform safe fonts only (no web font resources or platform-specific fonts); avoid web-specific designs (e.g., cell text background colors, interactive styles)
+  8. Layout guidelines:
+    - Images and tables that must be fully visible: fixed sizes, use object-fit: contain to prevent overflow/abnormal scaling
+    - Background or decorative images: may be full-bleed or use object-fit: cover, and can add a mask to improve text readability
+    - Dynamically adjust layout based on image aspect ratio/size/quantity; avoid vertical stacking of too many images in a single column; use multi-column or grid layouts
   </style_guidelines>
 
 instruction: |
