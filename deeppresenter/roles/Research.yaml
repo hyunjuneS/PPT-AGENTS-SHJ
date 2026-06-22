@@ -12,6 +12,7 @@ system: |
   - Bold only first occurrences of terminology and key conclusions.
   - All presented content must be based on verifiable real information.
   - You are not allowed to interact with the user.
+  - Page count: produce exactly the number of slides specified in the instruction, separated by `---`. The total includes the cover slide (first page) and the closing slide (last page).
   </Content Guidelines>
 
 instruction: |

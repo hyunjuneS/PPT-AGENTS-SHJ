@@ -73,6 +73,7 @@ async def health():
 async def research(
     file: UploadFile = File(...),
     instruction: str = Form(...),
+    num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, 기본 10장)"),
 ):
     """[DeepPresenter] .md 파일 + instruction → Research 에이전트로 슬라이드 원고 생성."""
     from deeppresenter.agents.env import AgentEnv
@@ -101,11 +102,12 @@ async def research(
     req = InputRequest(
         instruction=instruction,
         attachments=[str(attachment_path)],
+        num_pages=str(num_pages),
         language=_LANGUAGE,
     )
 
-    logger.info("[Research] session=%s lang=%s instruction=%r",
-                session_id, _LANGUAGE, instruction[:80])
+    logger.info("[Research] session=%s lang=%s num_pages=%d instruction=%r",
+                session_id, _LANGUAGE, num_pages, instruction[:80])
 
     config = _make_deep_config()
     manuscript_path = None
