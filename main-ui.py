@@ -1,15 +1,17 @@
-import argparse
 import logging
 import os
 import uuid
 from pathlib import Path
 
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from agents.agent import Agent
 from agents.llms import AsyncLLM
+
+# .env 파일을 os.environ 에 주입. reload worker 재import 시에도 동일하게 적용된다.
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,9 +22,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="PPT Agent API", version="0.2.0")
 
 # ---------------------------------------------------------------------------
-# LLM — 환경변수에서 읽음.
-# __main__ 블록에서 args → os.environ 에 먼저 쓴 뒤 uvicorn을 띄우기 때문에
-# reload worker가 이 모듈을 다시 import해도 올바른 값을 가져간다.
+# LLM — 환경변수에서 읽음 (.env 또는 시스템 환경변수)
 # ---------------------------------------------------------------------------
 _llm = AsyncLLM(
     model=os.environ.get("MODEL_NAME", "claude-opus-4-5"),
@@ -39,9 +39,11 @@ _design_llm = AsyncLLM(
     timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
 )
 
-LLM_MAPPING: dict[str, AsyncLLM] = {"language": _llm}
+# PPT_LANGUAGE env — 출력 언어 고정. 값: "en" (기본) 또는 "ko".
+_LANGUAGE: str = os.environ.get("PPT_LANGUAGE", "en")
 
-logger.info("LLM configured: research=%s  design=%s", _llm, _design_llm)
+logger.info("LLM configured: research=%s  design=%s  language=%s",
+            _llm, _design_llm, _LANGUAGE)
 
 
 def _make_deep_config():
@@ -67,38 +69,10 @@ async def health():
     return {"status": "ok", "model": _llm.model}
 
 
-@app.post("/analyze")
-async def analyze_markdown(file: UploadFile = File(...)):
-    """[pptagent] .md 파일을 doc_extractor 에이전트로 분석해 JSON 반환."""
-    if not file.filename or not file.filename.lower().endswith(".md"):
-        raise HTTPException(status_code=400, detail="Only .md files are accepted.")
-
-    raw = await file.read()
-    try:
-        markdown_text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
-
-    if not markdown_text.strip():
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-
-    logger.info("Analyzing file: %s (%d chars)", file.filename, len(markdown_text))
-    agent = Agent(name="doc_extractor", llm_mapping=LLM_MAPPING)
-
-    try:
-        turn_id, result = await agent(markdown_document=markdown_text)
-    except Exception as e:
-        logger.error("Agent error: %s", e)
-        raise HTTPException(status_code=500, detail=f"Agent failed: {e}")
-
-    return JSONResponse(content={"turn_id": turn_id, "result": result})
-
-
 @app.post("/research")
 async def research(
     file: UploadFile = File(...),
     instruction: str = Form(...),
-    language: str = Form(default="en"),
 ):
     """[DeepPresenter] .md 파일 + instruction → Research 에이전트로 슬라이드 원고 생성."""
     from deeppresenter.agents.env import AgentEnv
@@ -127,10 +101,11 @@ async def research(
     req = InputRequest(
         instruction=instruction,
         attachments=[str(attachment_path)],
-        language=language,
+        language=_LANGUAGE,
     )
 
-    logger.info("[Research] session=%s instruction=%r", session_id, instruction[:80])
+    logger.info("[Research] session=%s lang=%s instruction=%r",
+                session_id, _LANGUAGE, instruction[:80])
 
     config = _make_deep_config()
     manuscript_path = None
@@ -138,7 +113,7 @@ async def research(
 
     try:
         async with AgentEnv(workspace) as env:
-            agent = Research(config=config, agent_env=env, workspace=workspace, language=language)
+            agent = Research(config=config, agent_env=env, workspace=workspace, language=_LANGUAGE)
             async for item in agent.loop(req):
                 if isinstance(item, str):
                     manuscript_path = item
@@ -207,7 +182,6 @@ async def export_pptx(
 async def design(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
-    language: str = Form(default="en"),
 ):
     """[DeepPresenter] 슬라이드 원고 .md → Design 에이전트 → HTML 슬라이드 생성."""
     from deeppresenter.agents.design import Design
@@ -231,7 +205,7 @@ async def design(
     manuscript_path = workspace / file.filename
     manuscript_path.write_bytes(raw)
 
-    req = InputRequest(instruction=instruction, language=language)
+    req = InputRequest(instruction=instruction, language=_LANGUAGE)
 
     template_content = ""
     tmpl_path = os.environ.get("DESIGN_TEMPLATE_FILE")
@@ -240,8 +214,8 @@ async def design(
 
     config_file = os.environ.get("DESIGN_CONFIG_FILE") or None
 
-    logger.info("[Design] session=%s file=%s config=%s template=%s",
-                session_id, file.filename,
+    logger.info("[Design] session=%s lang=%s file=%s config=%s template=%s",
+                session_id, _LANGUAGE, file.filename,
                 Path(config_file).name if config_file else "Design.yaml",
                 bool(template_content))
 
@@ -251,7 +225,7 @@ async def design(
 
     try:
         async with AgentEnv(workspace) as env:
-            agent = Design(config=config, agent_env=env, workspace=workspace, language=language,
+            agent = Design(config=config, agent_env=env, workspace=workspace, language=_LANGUAGE,
                            config_file=config_file)
             async for item in agent.loop(req, markdown_file=str(manuscript_path), template_content=template_content):
                 if isinstance(item, str):
@@ -281,66 +255,41 @@ async def design(
 # Entry point
 # ---------------------------------------------------------------------------
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="PPT Agent FastAPI server")
-    # LLM
-    parser.add_argument("--api-key", required=True, help="LLM API key")
-    parser.add_argument("--url",     default=None,  help="LLM base URL (OpenAI-compatible)")
-    parser.add_argument("--llm",     default="claude-opus-4-5", help="Model name (default: claude-opus-4-5)")
-    parser.add_argument("--timeout", type=int, default=120, help="LLM request timeout in seconds (default: 120)")
-    # Server
-    parser.add_argument("--host",      default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
-    parser.add_argument("--port",      type=int, default=5000, help="Bind port (default: 5000)")
-    parser.add_argument("--reload",    action=argparse.BooleanOptionalAction, default=True, help="Auto-reload (default: on)")
-    parser.add_argument("--log-level", default="info",
-                        choices=["debug", "info", "warning", "error", "critical"],
-                        help="Uvicorn log level (default: info)")
-    parser.add_argument("--heavy-reflect", action="store_true", default=False,
-                        help="Enable visual VLM inspection: render each slide and send image to Design agent (requires --vlm)")
-    parser.add_argument("--vlm", default=None,
-                        help="Multimodal model for Design agent visual inspection (required when --heavy-reflect is set).")
-    parser.add_argument("--template", default=None,
-                        help="Design 에이전트에 주입할 디자인 스킬 파일 (.md). §2 디자인 규칙 / §3 금지 사항 / §4 표현 가이드를 담은 파일을 지정한다.")
-    return parser.parse_args()
-
-
 if __name__ == "__main__":
     import sys
-    args = parse_args()
 
-    if args.heavy_reflect and not args.vlm:
-        print("error: --vlm is required when --heavy-reflect is set", file=sys.stderr)
+    # 필수 환경변수 검증
+    if not os.environ.get("OPENAI_API_KEY"):
+        print("error: OPENAI_API_KEY is required (set in .env or environment)", file=sys.stderr)
         sys.exit(1)
 
-    if args.template:
-        tmpl = Path(args.template).resolve()
-        if not tmpl.exists():
-            print(f"error: --template file not found: {tmpl}", file=sys.stderr)
+    heavy_reflect = os.environ.get("DEEPPRESENTER_HEAVY_REFLECT", "").lower() in ("1", "true", "yes")
+    if heavy_reflect and not os.environ.get("DESIGN_MODEL_NAME"):
+        print("error: DESIGN_MODEL_NAME is required when DEEPPRESENTER_HEAVY_REFLECT is set", file=sys.stderr)
+        sys.exit(1)
+
+    # 경로 검증
+    for env_key in ("DESIGN_CONFIG_FILE", "DESIGN_TEMPLATE_FILE"):
+        val = os.environ.get(env_key)
+        if val and not Path(val).exists():
+            print(f"error: {env_key} not found: {val}", file=sys.stderr)
             sys.exit(1)
-        if tmpl.suffix in (".yaml", ".yml"):
-            os.environ["DESIGN_CONFIG_FILE"] = str(tmpl)   # role YAML 교체
-        else:
-            os.environ["DESIGN_TEMPLATE_FILE"] = str(tmpl) # instruction 주입 (.md)
 
-    os.environ["OPENAI_API_KEY"]  = args.api_key
-    os.environ["MODEL_NAME"]      = args.llm
-    os.environ["LLM_TIMEOUT"]     = str(args.timeout)
-    if args.url:
-        os.environ["OPENAI_BASE_URL"] = args.url
-    if args.heavy_reflect:
-        os.environ["DEEPPRESENTER_HEAVY_REFLECT"] = "1"
-    if args.vlm:
-        os.environ["DESIGN_MODEL_NAME"] = args.vlm
+    host      = os.environ.get("HOST", "0.0.0.0")
+    port      = int(os.environ.get("PORT", "5000"))
+    reload    = os.environ.get("RELOAD", "true").lower() not in ("0", "false", "no")
+    log_level = os.environ.get("LOG_LEVEL", "info")
 
-    logger.info("LLM  : model=%s  vlm=%s  template=%s  url=%s",
-                args.llm, args.vlm or "(none)", args.template or "(none)", args.url)
-    logger.info("Server: host=%s port=%d reload=%s log_level=%s",
-                args.host, args.port, args.reload, args.log_level)
+    logger.info("LLM  : model=%s  vlm=%s  url=%s",
+                os.environ.get("MODEL_NAME", "claude-opus-4-5"),
+                os.environ.get("DESIGN_MODEL_NAME", "(none)"),
+                os.environ.get("OPENAI_BASE_URL", "(none)"))
+    logger.info("Server: host=%s port=%d reload=%s log_level=%s", host, port, reload, log_level)
 
     uvicorn.run(
         "main-ui:app",
-        host=args.host,
-        port=args.port,
-        reload=args.reload,
-        log_level=args.log_level,
+        host=host,
+        port=port,
+        reload=reload,
+        log_level=log_level,
     )

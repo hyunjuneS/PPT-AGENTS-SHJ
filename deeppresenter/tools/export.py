@@ -7,23 +7,18 @@ from pathlib import Path
 _SCRIPT_DIR = Path(__file__).resolve().parents[1] / "html2pptx"
 _CLI_JS = _SCRIPT_DIR / "html2pptx_cli.js"
 
-# 기본 Chromium 경로 — 환경변수 PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH 로 덮어쓸 수 있음
-_DEFAULT_CHROMIUM = Path(
-    "/mnt/c/Users/X0160146/Desktop/26/playwright/chromium-1223/chrome-linux64/chrome"
-)
+# _DEFAULT_CHROMIUM = Path(
+#     "/mnt/c/Users/X0160146/Desktop/26/playwright/chromium-1223/chrome-linux64/chrome"
+# )
 
 
 def _get_chromium_executable() -> str | None:
-    """Return Chromium executable path (env var > default path)."""
-    # 1. 환경변수 우선
+    """Return Chromium executable path from env var, or None to use Playwright's installed Chromium."""
     env_path = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")
     if env_path and Path(env_path).exists():
         return env_path
-
-    # 2. 기본 경로
-    if _DEFAULT_CHROMIUM.exists():
-        return str(_DEFAULT_CHROMIUM)
-
+    # if _DEFAULT_CHROMIUM.exists():
+    #     return str(_DEFAULT_CHROMIUM)
     return None
 
 

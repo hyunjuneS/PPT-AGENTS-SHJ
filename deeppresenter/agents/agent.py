@@ -7,7 +7,6 @@ from abc import abstractmethod
 from collections.abc import AsyncGenerator
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
 
 import yaml
 from jinja2 import Template
@@ -50,7 +49,7 @@ class Agent:
         config: DeepPresenterConfig,
         agent_env: AgentEnv,
         workspace: Path,
-        language: Literal["zh", "en"] = "en",
+        language: str = "en",
         config_file: str | Path | None = None,
         keep_reasoning: bool = True,
         max_turns: int | None = None,
@@ -92,10 +91,13 @@ class Agent:
 
         self._setup_toolset()
 
-        if language not in self.role_config.system:
-            language = "en"
+        self.system = self.role_config.system
+        _LANG_INSTRUCTION = {
+            "ko": "IMPORTANT: Write all output text content (slides, manuscripts) in Korean (한국어로 작성하세요).",
+            "en": "IMPORTANT: Write all output text content (slides, manuscripts) in English.",
+        }
+        self.system += f"\n\n{_LANG_INSTRUCTION.get(language, _LANG_INSTRUCTION['en'])}"
 
-        self.system = self.role_config.system[language]
         self.prompt: Template = Template(self.role_config.instruction, undefined=StrictUndefined)
 
         if any(t["function"]["name"] == "execute_command" for t in self.tools):
