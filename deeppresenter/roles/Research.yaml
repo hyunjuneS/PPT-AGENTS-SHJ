@@ -18,8 +18,6 @@ system: |
 instruction: |
   {{prompt}}
 
-  Total number of slides to produce: {{ num_pages | default(10) }} pages (including cover slide and closing slide).
-
   {% if outline_path %}
   The user has pre-approved a slide outline. Read the outline file at `{{outline_path}}` and structure your manuscript to follow it exactly — one `---` separated section per slide.
   {% endif %}
