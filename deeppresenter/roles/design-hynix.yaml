@@ -24,43 +24,10 @@ system: |
   </workflow>
 
   <style_guidelines>
-  1. Slide layout: All slides use 16:9 fixed size (1280x720px). <body> must be set to `width:1280px; height:720px; overflow:hidden` to strictly control boundaries; other elements use relative positioning to prevent overflow; keep enough bottom spacing for body text; avoid large blank areas and ensure body text is clear and readable (font size at least 18px)
-  2. Charts (Native PPT Charts — No SVG/div):
-     When charts are needed, use the data-attribute format below instead of SVG, Canvas, or div bars.
-     Supported: bar | line | pie | doughnut
-     ```html
-     <div
-       data-chart-type="bar"
-       data-chart-labels='["Q1","Q2","Q3","Q4"]'
-       data-chart-series='[{"name":"FY2024","values":[120,145,138,162]}]'
-       data-chart-colors='["1F3864"]'
-       data-chart-bardir="col"
-       style="position:absolute; left:64px; top:186px; width:576px; height:350px;">
-     </div>
-     ```
-     Multiple series: add more objects to data-chart-series array, matching colors count.
-     JSON attribute values wrapped in single quotes. No child elements inside the div.
-  3. Structure and semantics: Text must be wrapped inside `<p>`, `<li>`, `<span>`, etc.; no bare text. Lists must use `<ul>/<ol>`; no custom bullets
-  4. Style and rendering constraints:
-    - Inline elements must not use margin/border/shadow or decorative styles; background images `url(...)` apply only to `<div>`
-    - Safety constraints: use cross-platform safe fonts only (no web font resources or platform-specific fonts); avoid web-specific designs (e.g., cell text background colors, interactive styles)
-  5. Layout guidelines:
-    - Images and tables that must be fully visible: fixed sizes, use object-fit: contain to prevent overflow/abnormal scaling
-    - Background or decorative images: may be full-bleed or use object-fit: cover, and can add a mask to improve text readability
-    - Dynamically adjust layout based on image aspect ratio/size/quantity; avoid vertical stacking of too many images in a single column; use multi-column or grid layouts
-  6. Required UI elements on every slide:
-    - 대외비 badge: position top-right (`position:absolute; right:64px; top:16px`), red background (`#FF0000`), white bold text (`color:#FFFFFF; font-weight:bold`)
-      ```html
-      <div style="position:absolute;right:64px;top:16px;width:120px;height:22px;background:#FF0000;display:flex;align-items:center;justify-content:center;">
-        <span style="font-size:16px;font-weight:bold;color:#FFFFFF;line-height:1.4;">대외비</span>
-      </div>
-      ```
-    - Header divider `<hr>` below the slide title — use the following style exactly:
-      ```css
-      border: none;
-      border-top: 1px solid #808080;
-      margin: 12px -12px;
-      ```
+  1. 모든 슬라이드는 16:9 (1280x720px) 크기를 반드시 준수한다. `<body>`는 `width:1280px; height:720px; overflow:hidden`으로 고정한다.
+  2. HTML 템플릿을 사용하되, 폰트 크기 및 도형(shape) 크기는 콘텐츠에 맞게 조정할 수 있다.
+  3. 특수 이모지 및 이모티콘은 사용하지 않는다.
+  4. 도형과 글자가 서로 겹치지 않도록 주의한다. 렌더링된 이미지가 입력으로 제공된 경우, 겹치는 문구나 도형이 없는지 반드시 확인한다.
   </style_guidelines>
 
 instruction: |
