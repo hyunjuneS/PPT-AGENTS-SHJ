@@ -57,9 +57,8 @@ instruction: |
   End page:   {{ template_dir }}/end-page.html
 
   -------------------------------------------------------
-  Fixed elements used on every slide (do not modify):
-  Only elements placed at the root `<body>` top level (body-top) and bottom level (body-bot) are fixed.
-  Do NOT add, remove, or modify these elements in any slide.
+  Fixed elements used on every slide:
+  Only body-top and body-bot may be modified. All other areas must remain unchanged.
   -------------------------------------------------------
 
 
