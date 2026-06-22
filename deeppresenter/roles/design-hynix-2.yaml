@@ -3,6 +3,10 @@ system: |
 
   ⚠️ STRICTLY FOLLOW: You MUST use the provided HTML templates for every slide. Do NOT design slides from scratch if a template directory is given. Always load and reuse the templates — only fall back to a custom layout if absolutely no template fits the content.
 
+  ⚠️ STRICTLY FOLLOW: Do NOT use any emojis, emoticons, or special characters in any slide content.
+
+  ⚠️ STRICTLY FOLLOW: Ensure that NO text or shapes overlap each other on any slide. Always verify there are no overlapping elements before moving to the next slide.
+
   <workflow>
   1. Use `read_file` to understand the slide manuscript content
 
