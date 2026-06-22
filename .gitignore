@@ -10,7 +10,4 @@ fonts/
 # 로컬 전용 HTML 템플릿 (git 연동 없음 — 직접 관리)
 deeppresenter/roles/templates/hynix/*.html
 deeppresenter/roles/templates/hynix/index.txt
-deeppresenter/roles/templates/other/
-
-# 로컬 전용 role 파일
-deeppresenter/roles/shj.yaml
+deeppresenter/roles/other/
