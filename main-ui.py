@@ -31,11 +31,12 @@ _llm = AsyncLLM(
     timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
 )
 
-# Design 에이전트 전용 모델 — DESIGN_MODEL_NAME이 없으면 기본 모델 사용
+# Design 에이전트 전용 모델 (VLM) — DESIGN_MODEL_NAME이 없으면 기본 모델 사용.
+# API 키는 VLM_API_KEY가 있으면 사용하고, 없으면 OPENAI_API_KEY로 폴백한다.
 _design_llm = AsyncLLM(
     model=os.environ.get("DESIGN_MODEL_NAME") or os.environ.get("MODEL_NAME", "claude-opus-4-5"),
     base_url=os.environ.get("OPENAI_BASE_URL") or None,
-    api_key=os.environ.get("OPENAI_API_KEY", ""),
+    api_key=os.environ.get("VLM_API_KEY") or os.environ.get("OPENAI_API_KEY", ""),
     timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
 )
 
