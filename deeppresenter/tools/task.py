@@ -9,7 +9,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-import time
 from pathlib import Path
 
 from deeppresenter.utils.constants import HEAVY_REFLECT, TOOL_CUTOFF_LEN
@@ -434,6 +433,17 @@ async def inspect_slide(
     # scrollWidth/scrollHeight로 직접 측정해야만 잡아낼 수 있다.
     img_bytes, dims = await _screenshot_slide(html_file, aspect_ratio)
 
+    # HEAVY_REFLECT 모드면 이번 inspect_slide 호출마다(overflow로 반려되더라도) 렌더링
+    # 결과를 저장한다 — edit_file → inspect_slide 반복 이력을 slide_02_01, slide_02_02...
+    # 순서로 남겨서 무엇이 왜 반려됐는지 나중에 확인할 수 있게 한다.
+    if HEAVY_REFLECT and img_bytes:
+        vlm_dir = path.parent / "vlm_input"
+        vlm_dir.mkdir(parents=True, exist_ok=True)
+        seq = len(list(vlm_dir.glob(f"{path.stem}_*.jpg"))) + 1
+        save_path = vlm_dir / f"{path.stem}_{seq:02d}.jpg"
+        save_path.write_bytes(img_bytes)
+        debug(f"VLM input image saved: {save_path}")
+
     if dims:
         width_overflow = max(0, dims.get("scrollWidth", 0) - dims.get("width", 0) - 1)
         height_overflow = max(0, dims.get("scrollHeight", 0) - dims.get("height", 0) - 1)
@@ -455,13 +465,6 @@ async def inspect_slide(
     # overflow 없음 — heavy_reflect 모드면 방금 찍은 렌더링 이미지를 VLM 검토용으로 반환
     if HEAVY_REFLECT:
         if img_bytes:
-            vlm_dir = path.parent / "vlm_input"
-            vlm_dir.mkdir(parents=True, exist_ok=True)
-            ts = int(time.time() * 1000)
-            save_path = vlm_dir / f"{path.stem}_{ts}.jpg"
-            save_path.write_bytes(img_bytes)
-            debug(f"VLM input image saved: {save_path}")
-
             b64 = base64.b64encode(img_bytes).decode()
             return [
                 {
