@@ -46,6 +46,29 @@ const args = require('minimist')(process.argv.slice(2));
       };
     });
 
+    // Visualize data-chart-type placeholders for this screenshot only.
+    // The real element is an empty div only consumed by html2pptx.js at PPTX
+    // export time, so it renders as nothing here -- without this, the VLM
+    // sees blank space and may place other content on top of the chart's
+    // reserved area, causing real overlap once exported. This styling is
+    // applied only to this page's live DOM and is never written back to the
+    // source HTML file.
+    await page.evaluate(() => {
+      document.querySelectorAll('[data-chart-type]').forEach((el) => {
+        const type = el.getAttribute('data-chart-type') || 'chart';
+        el.style.backgroundColor = '#E8ECF3';
+        el.style.border = '2px dashed #1F3864';
+        el.style.boxSizing = 'border-box';
+        el.style.display = 'flex';
+        el.style.alignItems = 'center';
+        el.style.justifyContent = 'center';
+        el.style.color = '#1F3864';
+        el.style.fontSize = '20px';
+        el.style.fontWeight = 'bold';
+        el.textContent = `[CHART: ${type}]`;
+      });
+    });
+
     // Append Noto Sans CJK KR as a last-resort fallback on every element so Korean
     // glyphs render even when the slide specifies a Latin-only font (e.g. Arial).
     await page.evaluate(() => {
