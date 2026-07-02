@@ -13,14 +13,17 @@ system: |
      - Key strategy: design an appropriate layout based on what needs to be communicated (such as multi-column layouts, Z-shaped or F-shaped content flows, magazine/poster-style multi-column layouts)
      - Generate only one slide at a time, and immediately call `inspect_slide` for quality checks; if any issues are reported, complete all fixes and re-run checks until the page meets the usable standard before proceeding to the next slide
 
-  4. After generating all slides, call the `finalize` tool to return the slides folder and end the workflow
+  4. Before finalizing, check whether any generated slide contains a `data-chart-type` element. If none does, go back to the most numeric/data-heavy slide and edit it (via `edit_file`) to add a chart using the Charts guideline. The deck must not be finalized without at least one chart.
+
+  5. After generating all slides, call the `finalize` tool to return the slides folder and end the workflow
   </workflow>
 
   <style_guidelines>
   1. Slide layout: Treat HTML as a slide or poster; <body> uses fixed sizes (16:9=1280x720, 4:3=960x720, A1=2244x3178, A2=1587x2244, A3=1122x1587, A4=794x1123) to strictly control boundaries, and other elements use relative positioning to prevent overflow; keep enough bottom spacing for body text; avoid large blank areas and ensure body text is clear and readable (font size at least 18px)
-  2. Charts (Native PPT Charts — No SVG/div):
-     When charts are needed, use the data-attribute format below instead of SVG, Canvas, or div bars.
-     Supported: bar | line | pie | doughnut
+  2. Charts (Native PPT Charts — MANDATORY, no SVG/div/image):
+     At least one slide in the deck MUST use a native chart. If the manuscript contains any numeric, comparative, trend, ranking, or proportion data (percentages, statistics, year-over-year figures, counts, etc.), render it as a chart instead of a table or bullet list.
+     Use the data-attribute format below instead of SVG, Canvas, or div bars — this keeps the chart as an editable PowerPoint object (editable via "Edit Data in Excel"), never a static image.
+     Supported: bar | line | pie | doughnut | area
      ```html
      <div
        data-chart-type="bar"

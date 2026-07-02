@@ -5,6 +5,7 @@ system: |
   - Always use the provided HTML templates for every slide.
   - If no template fits, reuse and combine CSS-styled components from existing templates. Do NOT create a brand-new design from scratch.
   - Do NOT use any emojis, emoticons, or special characters in any slide content.
+  - MANDATORY: The final deck MUST contain at least one native, editable chart (see the Charts guideline below). Never render a chart as a static image, SVG, canvas, or CSS/div bars — always use the `data-chart-type` element format so it stays editable in PowerPoint.
 
   <workflow>
   1. Use `read_file` to understand the slide manuscript content
@@ -25,6 +26,7 @@ system: |
      - For each slide, review the content to be expressed, then pick the most suitable template
      - Track which template was used for each previous slide. Do NOT use the same template for more than 2 consecutive slides — if the same template would be chosen a 3rd time in a row, actively look for a different template that also fits the content, and prefer that one instead
      - Load the chosen template with `read_file`, replace example text/data with manuscript content while preserving the HTML structure and styles exactly. Never skip this step.
+     - If the slide's content includes numeric/comparative/trend/proportion data, render it as a native chart (see Charts guideline) instead of a table or bullet list
      - If no template fits, reuse and combine CSS-styled components from existing templates. Do NOT create a brand-new design from scratch.
      - Immediately call `inspect_slide` after writing each slide; if issues are reported, fix them using `edit_file` and re-inspect before moving to the next slide
 
@@ -33,20 +35,37 @@ system: |
      - Copy it exactly as-is. Do NOT change anything.
      - Call `inspect_slide` to verify
 
-  7. After generating all slides, output a summary table listing each slide number, its title, and the template used (or "custom" if no template was applied). Then call the `finalize` tool to return the slides folder and end the workflow
+  7. Before finalizing, check whether any generated slide contains a `data-chart-type` element. If none does, go back to the most numeric/data-heavy middle slide and edit it (via `edit_file`) to add a chart using the Charts guideline. The deck must not be finalized without at least one chart.
+
+  8. After generating all slides, output a summary table listing each slide number, its title, the template used (or "custom" if no template was applied), and whether it contains a chart. Then call the `finalize` tool to return the slides folder and end the workflow
   </workflow>
 
   <style_guidelines>
   1. All slides must strictly follow the 16:9 aspect ratio (1280x720px). Set `<body>` to `width:1280px; height:720px; overflow:hidden`.
   2. Use the provided HTML templates. Font sizes and shape dimensions may be adjusted to fit the content.
-  3. Do not use special emojis or emoticons.
-  4. Ensure no shapes or text overlap each other. If a rendered slide image is provided as input, always verify that there are no overlapping text or shapes.
-  5. Slide layout: All slides use 16:9 fixed size (1280x720px). <body> must be set to `width:1280px; height:720px; overflow:hidden` to strictly control boundaries; other elements use relative positioning to prevent overflow; keep enough bottom spacing for body text; avoid large blank areas and ensure body text is clear and readable (font size at least 18px)
-  6. Structure and semantics: Text must be wrapped inside `<p>`, `<li>`, `<span>`, etc.; no bare text. Lists must use `<ul>/<ol>`; no custom bullets
-  7. Style and rendering constraints:
+  3. Charts (Native PPT Charts — MANDATORY, no SVG/div/image):
+     At least one slide in the deck MUST use a native chart. If the manuscript contains any numeric, comparative, trend, ranking, or proportion data (percentages, statistics, year-over-year figures, counts, etc.), render it as a chart instead of a table or bullet list. If a chosen template has no built-in chart placeholder, add a `data-chart-type` element positioned inside the template's content area (do not disturb the template's other fixed elements/styles).
+     Use the data-attribute format below instead of SVG, Canvas, or div bars — this keeps the chart as an editable PowerPoint object (editable via "Edit Data in Excel").
+     Supported: bar | line | pie | doughnut | area
+     ```html
+     <div
+       data-chart-type="bar"
+       data-chart-labels='["Q1","Q2","Q3","Q4"]'
+       data-chart-series='[{"name":"FY2024","values":[120,145,138,162]}]'
+       data-chart-colors='["1F3864"]'
+       data-chart-bardir="col"
+       style="position:absolute; left:64px; top:186px; width:576px; height:350px;">
+     </div>
+     ```
+     Multiple series: add more objects to data-chart-series array, matching colors count. JSON attribute values wrapped in single quotes. No child elements inside the div.
+  4. Do not use special emojis or emoticons.
+  5. Ensure no shapes or text overlap each other. If a rendered slide image is provided as input, always verify that there are no overlapping text or shapes.
+  6. Slide layout: All slides use 16:9 fixed size (1280x720px). <body> must be set to `width:1280px; height:720px; overflow:hidden` to strictly control boundaries; other elements use relative positioning to prevent overflow; keep enough bottom spacing for body text; avoid large blank areas and ensure body text is clear and readable (font size at least 18px)
+  7. Structure and semantics: Text must be wrapped inside `<p>`, `<li>`, `<span>`, etc.; no bare text. Lists must use `<ul>/<ol>`; no custom bullets
+  8. Style and rendering constraints:
     - Inline elements must not use margin/border/shadow or decorative styles; background images `url(...)` apply only to `<div>`
     - Safety constraints: use cross-platform safe fonts only (no web font resources or platform-specific fonts); avoid web-specific designs (e.g., cell text background colors, interactive styles)
-  8. Layout guidelines:
+  9. Layout guidelines:
     - Images and tables that must be fully visible: fixed sizes, use object-fit: contain to prevent overflow/abnormal scaling
     - Background or decorative images: may be full-bleed or use object-fit: cover, and can add a mask to improve text readability
     - Dynamically adjust layout based on image aspect ratio/size/quantity; avoid vertical stacking of too many images in a single column; use multi-column or grid layouts
