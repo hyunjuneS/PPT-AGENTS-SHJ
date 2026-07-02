@@ -19,6 +19,7 @@ system: |
   3. Load the template index to know what templates are available for middle slides:
      - Call `list_directory` on the template directory provided in the instruction
      - Call `read_file` on `index.txt` inside the template directory to understand each template's use case
+     - If `index.txt` mentions the typical repeating-component count for a template, use it only as a hint for choosing the template requiring the least modification — it does not exempt you from the item-count matching procedure in step 5
 
   4. Based on the manuscript's theme, domain, audience, and other factors, develop a "slide master" style design plan (including color scheme, fonts, etc.), save it as global.css under `slides/`, and use it to guide the layout of the slides
 
@@ -26,9 +27,15 @@ system: |
      - For each slide, review the content to be expressed, then pick the most suitable template
      - If the content is numeric data well-suited for comparison (survey results, export/sales figures, statistics, rankings, trends, etc.), use `template4.html` for that slide
      - Track which template was used for each previous slide. Do NOT use the same template for more than 2 consecutive slides — if the same template would be chosen a 3rd time in a row, actively look for a different template that also fits the content, and prefer that one instead
-     - Load the chosen template with `read_file`, replace example text/data with manuscript content while preserving the HTML structure and styles exactly. Never skip this step.
+     - Before writing the slide, count the exact number of discrete items the manuscript requires for this slide (list entries, cards, stats, steps, comparison entries, etc.). Call this N.
+     - Load the chosen template with `read_file`. Locate its repeating component block (the card/box/list-item/column that repeats to form a group) and count how many instances it currently has. Call this M.
+     - Replace example text/data with manuscript content while preserving the HTML structure and styles exactly. Never skip this step.
+       - If N == M, fill each existing component with its corresponding manuscript item.
+       - If N > M, duplicate the repeating component's HTML node (and any CSS rule scoped to it) N-M more times so there are exactly N components. Keep each component's internal styling (colors, font, borders, icons, padding) unchanged — only the group container's sizing changes: proportionally shrink each item's width/height, or increase the grid/flex column count, so all N items fit inside the original container bounds without overlap or overflow. Never drop, merge, or truncate manuscript items to fit a smaller slot count.
+       - If N < M, delete the extra unused component nodes entirely (do not leave empty or placeholder cards) and proportionally enlarge the remaining N components to fill the freed space evenly. Do not leave large blank gaps.
      - If no template fits, reuse and combine CSS-styled components from existing templates. Do NOT create a brand-new design from scratch.
-     - Immediately call `inspect_slide` after writing each slide; if issues are reported, fix them using `edit_file` and re-inspect before moving to the next slide
+     - Before calling `inspect_slide`, re-read the file you just wrote and recount the components in the HTML. Confirm this count equals N; if it does not, fix it with `edit_file` and recount again.
+     - Call `inspect_slide` after writing each slide; if issues are reported, fix them using `edit_file` and re-inspect before moving to the next slide
 
   6. Generate the last slide:
      - Read `end-page.html` from the template directory using `read_file`
@@ -52,6 +59,7 @@ system: |
     - Images and tables that must be fully visible: fixed sizes, use object-fit: contain to prevent overflow/abnormal scaling
     - Background or decorative images: may be full-bleed or use object-fit: cover, and can add a mask to improve text readability
     - Dynamically adjust layout based on image aspect ratio/size/quantity; avoid vertical stacking of too many images in a single column; use multi-column or grid layouts
+  9. Item-count fidelity: Every discrete item required by the manuscript for a slide (list entries, cards, stats, steps, etc.) must appear as its own component in the final HTML — never omitted, silently merged, or squeezed to fit a template's original slot count. When a template's repeating component count does not match the manuscript's item count, clone or remove component instances (never the content) and rebalance the group's layout (column count, per-item width/height) so the total still fits the fixed 1280x720 canvas without overlap. Always verify (manuscript item count) == (component instances in the HTML) before calling `inspect_slide`.
   </style_guidelines>
 
 instruction: |
