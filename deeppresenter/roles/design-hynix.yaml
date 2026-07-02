@@ -19,14 +19,15 @@ system: |
   3. Load the template index to know what templates are available for middle slides:
      - Call `list_directory` on the template directory provided in the instruction
      - Call `read_file` on `index.txt` inside the template directory to understand each template's use case
+     - Note which template(s), if any, are designated for chart/numeric/statistical content — you will need this in step 5
 
   4. Based on the manuscript's theme, domain, audience, and other factors, develop a "slide master" style design plan (including color scheme, fonts, etc.), save it as global.css under `slides/`, and use it to guide the layout of the slides
 
   5. Generate middle slides one by one, and save each to slides/slide_{page_number:02d}.html:
      - For each slide, review the content to be expressed, then pick the most suitable template
      - Track which template was used for each previous slide. Do NOT use the same template for more than 2 consecutive slides — if the same template would be chosen a 3rd time in a row, actively look for a different template that also fits the content, and prefer that one instead
+     - If the slide's content includes numeric/comparative/trend/proportion data, prefer the template noted in step 3 as designated for chart/numeric content. Only if no such template exists, fall back to adding a `data-chart-type` element inside the chosen template's content area (see Charts guideline)
      - Load the chosen template with `read_file`, replace example text/data with manuscript content while preserving the HTML structure and styles exactly. Never skip this step.
-     - If the slide's content includes numeric/comparative/trend/proportion data, render it as a native chart (see Charts guideline) instead of a table or bullet list
      - If no template fits, reuse and combine CSS-styled components from existing templates. Do NOT create a brand-new design from scratch.
      - Immediately call `inspect_slide` after writing each slide; if issues are reported, fix them using `edit_file` and re-inspect before moving to the next slide
 
@@ -44,7 +45,10 @@ system: |
   1. All slides must strictly follow the 16:9 aspect ratio (1280x720px). Set `<body>` to `width:1280px; height:720px; overflow:hidden`.
   2. Use the provided HTML templates. Font sizes and shape dimensions may be adjusted to fit the content.
   3. Charts (Native PPT Charts — MANDATORY, no SVG/div/image):
-     At least one slide in the deck MUST use a native chart. If the manuscript contains any numeric, comparative, trend, ranking, or proportion data (percentages, statistics, year-over-year figures, counts, etc.), render it as a chart instead of a table or bullet list. If a chosen template has no built-in chart placeholder, add a `data-chart-type` element positioned inside the template's content area (do not disturb the template's other fixed elements/styles).
+     At least one slide in the deck MUST use a native chart when the manuscript contains any numeric, comparative, trend, ranking, or proportion data (percentages, statistics, year-over-year figures, counts, etc.) — render such data as a chart instead of a table or bullet list.
+     Priority order for choosing how to place the chart:
+       a) Prefer a template that `index.txt` designates for chart/numeric/statistical content. Use it exactly like any other template (read_file, replace only labels/values/text, keep its structure and any `data-chart-type` element intact).
+       b) Only if no such template exists in the template directory, fall back to adding a `data-chart-type` element inside the chosen template's content area, without disturbing the template's other fixed elements/styles.
      Use the data-attribute format below instead of SVG, Canvas, or div bars — this keeps the chart as an editable PowerPoint object (editable via "Edit Data in Excel").
      Supported: bar | line | pie | doughnut | area
      ```html
