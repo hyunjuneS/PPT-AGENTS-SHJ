@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import json
 import math
 import os
 import re
@@ -29,11 +30,16 @@ def _get_chromium_executable() -> str | None:
     return None
 
 
-async def _screenshot_slide(html_file: str, aspect_ratio: str = "16:9") -> bytes | None:
-    """HTML 슬라이드를 Playwright로 렌더링하여 JPEG bytes를 반환. 실패 시 None."""
+async def _screenshot_slide(
+    html_file: str, aspect_ratio: str = "16:9"
+) -> tuple[bytes | None, dict | None]:
+    """HTML 슬라이드를 Playwright로 렌더링.
+    (JPEG bytes, body 치수 dict{width,height,scrollWidth,scrollHeight}) 반환.
+    실패 시 (None, None).
+    """
     if not _SCREENSHOT_JS.exists():
         warning("screenshot.js not found — visual inspect disabled")
-        return None
+        return None, None
 
     SIZES = {
         "16:9": (1280, 720), "4:3": (960, 720),
@@ -61,10 +67,20 @@ async def _screenshot_slide(html_file: str, aspect_ratio: str = "16:9") -> bytes
             stderr=asyncio.subprocess.STDOUT,
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        stdout_text = stdout.decode(errors="replace")
+
+        dims = None
+        for line in stdout_text.splitlines():
+            if line.startswith("DIMS:"):
+                try:
+                    dims = json.loads(line[len("DIMS:"):])
+                except json.JSONDecodeError:
+                    pass
+                break
 
         if proc.returncode == 0 and Path(output).exists():
-            return Path(output).read_bytes()
-        warning(f"screenshot.js failed: {stdout.decode(errors='replace')}")
+            return Path(output).read_bytes(), dims
+        warning(f"screenshot.js failed: {stdout_text}")
     except Exception as e:
         warning(f"_screenshot_slide error: {e}")
     finally:
@@ -72,7 +88,7 @@ async def _screenshot_slide(html_file: str, aspect_ratio: str = "16:9") -> bytes
             os.unlink(output)
         except Exception:
             pass
-    return None
+    return None, None
 
 
 # ── finalize ──────────────────────────────────────────────────────────────────
@@ -374,8 +390,11 @@ async def inspect_slide(
 ) -> str | list:
     """
     Validate an HTML slide file.
-    Structural checks first (text-based). If HEAVY_REFLECT is enabled,
-    also renders the slide and returns an image for visual VLM review.
+    Structural checks first (text-based), then a deterministic content-overflow
+    check via a real browser render (scrollWidth/scrollHeight vs the fixed body
+    size — this catches overflow even though `overflow:hidden` clips it invisibly
+    in any screenshot). If HEAVY_REFLECT is enabled, also returns the rendered
+    image for visual VLM review.
     """
     path = Path(html_file)
     assert path.exists() and path.suffix == ".html", \
@@ -406,13 +425,35 @@ async def inspect_slide(
     bare_text_issues = _check_bare_text(content)
     issues.extend(bare_text_issues)
 
-    # 구조적 문제가 있으면 먼저 수정하도록 텍스트로 반환 (스크린샷 불필요)
+    # 구조적 문제가 있으면 먼저 수정하도록 텍스트로 반환 (렌더링 불필요)
     if issues:
         return "Issues found:\n" + "\n".join(f"- {i}" for i in issues)
 
-    # 구조 검사 통과 — heavy_reflect 모드면 렌더링 이미지 반환
+    # 구조 검사 통과 — 실제 브라우저 렌더링으로 overflow 여부를 결정적으로 확인.
+    # overflow:hidden은 넘친 콘텐츠를 스크린샷에서 안 보이게 가리므로,
+    # scrollWidth/scrollHeight로 직접 측정해야만 잡아낼 수 있다.
+    img_bytes, dims = await _screenshot_slide(html_file, aspect_ratio)
+
+    if dims:
+        width_overflow = max(0, dims.get("scrollWidth", 0) - dims.get("width", 0) - 1)
+        height_overflow = max(0, dims.get("scrollHeight", 0) - dims.get("height", 0) - 1)
+        if width_overflow > 0 or height_overflow > 0:
+            directions = []
+            if width_overflow > 0:
+                directions.append(f"{width_overflow:.0f}px horizontally")
+            if height_overflow > 0:
+                directions.append(f"{height_overflow:.0f}px vertically")
+            return (
+                "Issues found:\n"
+                f"- Content overflows the slide body by {' and '.join(directions)}. "
+                "This is clipped by `overflow:hidden` so it looks fine in a screenshot, "
+                "but the content is actually cut off / lost in the exported PPTX. "
+                "Reduce font size, shorten text, or resize/reposition elements so everything "
+                "fits within the fixed body bounds, then call inspect_slide again."
+            )
+
+    # overflow 없음 — heavy_reflect 모드면 방금 찍은 렌더링 이미지를 VLM 검토용으로 반환
     if HEAVY_REFLECT:
-        img_bytes = await _screenshot_slide(html_file, aspect_ratio)
         if img_bytes:
             vlm_dir = path.parent / "vlm_input"
             vlm_dir.mkdir(parents=True, exist_ok=True)
