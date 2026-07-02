@@ -3054,20 +3054,33 @@ async function html2pptx(htmlFile, pres, options = {}) {
       doughnut: pres.charts.DOUGHNUT,
       area:     pres.charts.AREA,
     };
+    const AXIS_CHART_TYPES = new Set(['bar', 'line', 'area']);
     for (const c of (slideData.charts || [])) {
-      const chartType = CHART_MAP[c.type.toLowerCase()] ?? pres.charts.BAR;
+      const type = c.type.toLowerCase();
+      const chartType = CHART_MAP[type] ?? pres.charts.BAR;
       const seriesData = c.series.map(s => ({
         name:   s.name,
         labels: c.labels,
         values: s.values,
       }));
-      targetSlide.addChart(chartType, seriesData, {
+      const chartOpts = {
         x: c.x, y: c.y, w: c.w, h: c.h,
         barDir:      c.barDir,
         chartColors: c.colors.length > 0 ? c.colors : undefined,
         showLegend:  c.series.length > 1,
         showValue:   true,
-      });
+      };
+      if (AXIS_CHART_TYPES.has(type)) {
+        // Without an explicit layout, PowerPoint auto-fits the plot area within
+        // the chart frame, but the margin it reserves for axis tick labels plus
+        // the showValue data labels above each bar can leave the plot looking
+        // noticeably shorter than the frame the HTML div specified. Fractions
+        // (0-1, relative to the chart frame) -- small margins left/top/right for
+        // axis labels and the data-label headroom, a larger bottom margin for
+        // category axis labels.
+        chartOpts.layout = { x: 0.05, y: 0.06, w: 0.93, h: 0.84 };
+      }
+      targetSlide.addChart(chartType, seriesData, chartOpts);
     }
 
     return { slide: targetSlide, placeholders: slideData.placeholders };
