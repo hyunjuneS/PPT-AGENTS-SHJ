@@ -44,7 +44,6 @@ system: |
     - Images and tables that must be fully visible: fixed sizes, use object-fit: contain to prevent overflow/abnormal scaling
     - Background or decorative images: may be full-bleed or use object-fit: cover, and can add a mask to improve text readability
     - Dynamically adjust layout based on image aspect ratio/size/quantity; avoid vertical stacking of too many images in a single column; use multi-column or grid layouts
-  6. Background: every slide's `<body>` background must be plain white (`background:#FFFFFF`). Do not use colored, gradient, image, textured, or patterned backgrounds for the slide body.
   </style_guidelines>
 
 instruction: |
