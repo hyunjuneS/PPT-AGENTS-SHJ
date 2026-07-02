@@ -745,6 +745,17 @@ async function extractSlideData(page) {
       return fonts.find(f => !GENERIC_FAMILIES.has(f.toLowerCase())) || fonts[0];
     };
 
+    // SVG elements expose `className` as an SVGAnimatedString, not a plain string,
+    // so `.includes()` throws on it. This normalizes className access for both
+    // HTML and SVG elements (needed once inline SVG content, e.g. from chart
+    // libraries like Plotly, appears in the DOM).
+    const safeClassName = (el) => {
+      const c = el && el.className;
+      if (typeof c === 'string') return c;
+      if (c && typeof c === 'object' && typeof c.baseVal === 'string') return c.baseVal;
+      return '';
+    };
+
     const pxToInch = (px) => px / PX_PER_IN;
     const pxToPoints = (pxStr) => parseFloat(pxStr) * PT_PER_PX;
     const parseInsetValue = (value, ref) => {
@@ -1076,10 +1087,8 @@ async function extractSlideData(page) {
             || node.tagName === 'SUB';
           const display = computed.display;
           // Never add line breaks for materialized pseudo-elements
-          const isPseudoElement = node.className && (
-            node.className.includes('__pseudo_before__') ||
-            node.className.includes('__pseudo_after__')
-          );
+          const isPseudoElement = safeClassName(node).includes('__pseudo_before__') ||
+            safeClassName(node).includes('__pseudo_after__');
           const allowInlineBreak = allowBlock
             && display
             && !display.startsWith('inline')
@@ -1208,6 +1217,7 @@ async function extractSlideData(page) {
     const elements = [];
     const placeholders = [];
     const charts = [];
+    const seenSvgRects = new Set();
     const textTags = ['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'LI'];
     const CONTAINER_TAGS = new Set(['DIV', 'HEADER', 'FOOTER', 'SECTION', 'ARTICLE', 'MAIN', 'NAV', 'ASIDE']);
     const processed = new Set();
@@ -1547,7 +1557,7 @@ async function extractSlideData(page) {
         }
       }
 
-      if (el.className && el.className.includes('placeholder') && el.tagName !== 'TABLE') {
+      if (safeClassName(el).includes('placeholder') && el.tagName !== 'TABLE') {
         const rect = el.getBoundingClientRect();
         if (rect.width === 0 || rect.height === 0) {
           errors.push(
@@ -1680,9 +1690,18 @@ async function extractSlideData(page) {
         }
       }
 
-      if (el.tagName === 'SVG') {
+      // Note: SVG-namespaced elements report a lowercase tagName ('svg'), unlike
+      // HTML elements which are always uppercased -- compare case-insensitively.
+      if (el.tagName.toLowerCase() === 'svg') {
         const rect = el.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) {
+        // Off-canvas guard: chart libraries (e.g. Plotly) sometimes keep hidden
+        // <svg> elements positioned far outside the slide for text measurement.
+        const isOnCanvas = rect.left > -1 && rect.top > -1;
+        // Dedup guard: some libraries stack multiple <svg> layers (background/
+        // main/hover) at the exact same position -- only keep one per rect.
+        const rectKey = `${Math.round(rect.left)},${Math.round(rect.top)},${Math.round(rect.width)},${Math.round(rect.height)}`;
+        if (rect.width > 0 && rect.height > 0 && isOnCanvas && !seenSvgRects.has(rectKey)) {
+          seenSvgRects.add(rectKey);
           const serializer = new XMLSerializer();
           const svgMarkup = serializer.serializeToString(el);
           elements.push({
@@ -1695,6 +1714,11 @@ async function extractSlideData(page) {
               h: pxToInch(rect.height)
             }
           });
+          markProcessed(el);
+          return;
+        }
+        if (rect.width > 0 && rect.height > 0) {
+          // Duplicate layer or off-canvas helper element -- drop silently, not an error.
           markProcessed(el);
           return;
         }
@@ -2067,10 +2091,10 @@ async function extractSlideData(page) {
         const firstLiForCheck = liElements[0];
         const firstLiStyle = firstLiForCheck ? window.getComputedStyle(firstLiForCheck) : null;
         const listStyleForCheck = firstLiStyle ? (firstLiStyle.listStyleType || ulComputed.listStyleType) : ulComputed.listStyleType;
-        const isChecklistClass = el.className && (
-          el.className.includes('checklist') ||
-          el.className.includes('check-list') ||
-          el.className.includes('task-list')
+        const isChecklistClass = (
+          safeClassName(el).includes('checklist') ||
+          safeClassName(el).includes('check-list') ||
+          safeClassName(el).includes('task-list')
         );
         const isStyledList = listStyleForCheck === 'none' || isChecklistClass;
 
@@ -2097,10 +2121,10 @@ async function extractSlideData(page) {
           // Check for inline elements with display:block/inline-block that are complex
           const inlineElements = li.querySelectorAll('strong, span, b, i, em');
           return Array.from(inlineElements).some((el) => {
-            if (el.className && (
-              el.className.includes('__pseudo_before__') ||
-              el.className.includes('__pseudo_after__')
-            )) return false;
+            if (
+              safeClassName(el).includes('__pseudo_before__') ||
+              safeClassName(el).includes('__pseudo_after__')
+            ) return false;
             const computed = window.getComputedStyle(el);
             if (isBulletMarker(el, computed)) return false;
             const display = computed.display;
@@ -2446,10 +2470,8 @@ async function extractSlideData(page) {
       // These need to be extracted as text elements, not skipped
       if (INLINE_TEXT_TAGS.has(el.tagName) && el.tagName !== 'BR') {
         const computed = window.getComputedStyle(el);
-        const isPseudoElement = el.className && (
-          el.className.includes('__pseudo_before__') ||
-          el.className.includes('__pseudo_after__')
-        );
+        const isPseudoElement = safeClassName(el).includes('__pseudo_before__') ||
+          safeClassName(el).includes('__pseudo_after__');
 
         // Handle pseudo-elements with visual styles (background, border, shadow, border-radius)
         if (isPseudoElement) {
@@ -2694,10 +2716,10 @@ async function extractSlideData(page) {
         // Check for inline elements with display:block
         const inlineElements = el.querySelectorAll('strong, span, b, i, em');
         const hasBlockInline = Array.from(inlineElements).some((child) => {
-          if (child.className && (
-            child.className.includes('__pseudo_before__') ||
-            child.className.includes('__pseudo_after__')
-          )) return false;
+          if (
+            safeClassName(child).includes('__pseudo_before__') ||
+            safeClassName(child).includes('__pseudo_after__')
+          ) return false;
           const computed = window.getComputedStyle(child);
           if (isBulletMarker(child, computed)) return false;
           const display = computed.display;

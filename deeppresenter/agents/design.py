@@ -3,6 +3,7 @@ from deeppresenter.utils.constants import PACKAGE_DIR
 from deeppresenter.utils.typings import InputRequest
 
 _HYNIX_TEMPLATE_DIR = str(PACKAGE_DIR / "roles" / "templates" / "hynix")
+_PLOTLY_PATH = str(PACKAGE_DIR / "assets" / "plotly.min.js")
 
 
 class Design(Agent):
@@ -16,6 +17,7 @@ class Design(Agent):
                 prompt=req.designagent_prompt,
                 template_content=template_content,
                 template_dir=_HYNIX_TEMPLATE_DIR,
+                plotly_path=_PLOTLY_PATH,
             )
             yield agent_message
 

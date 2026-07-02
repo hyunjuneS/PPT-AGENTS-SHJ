@@ -259,12 +259,13 @@ async def design_free_template(
     instruction: str = Form(default="Create a professional presentation."),
 ):
     """[DeepPresenter] 슬라이드 원고 .md → Design 에이전트 → HTML 슬라이드 생성.
-    템플릿 디렉토리 없이 Design 에이전트가 자유롭게 레이아웃을 설계한다.
-    DESIGN_CONFIG_FILE env를 무시하고 항상 기본 Design.yaml을 사용한다.
+    템플릿 디렉토리 없이 Design 에이전트가 자유롭게 레이아웃을 설계하고,
+    차트는 (네이티브 PPT 차트가 아니라) Plotly.js로 그린다.
+    DESIGN_CONFIG_FILE env를 무시하고 항상 DesignFreeTemplate.yaml을 사용한다.
     """
     from deeppresenter.agents.design import Design
     from deeppresenter.agents.env import AgentEnv
-    from deeppresenter.utils.constants import WORKSPACE_BASE
+    from deeppresenter.utils.constants import PACKAGE_DIR, WORKSPACE_BASE
     from deeppresenter.utils.typings import InputRequest
 
     if not file.filename or not file.filename.lower().endswith(".md"):
@@ -285,8 +286,10 @@ async def design_free_template(
 
     req = InputRequest(instruction=instruction, language=_LANGUAGE)
 
-    logger.info("[DesignFreeTemplate] session=%s lang=%s file=%s config=Design.yaml",
-                session_id, _LANGUAGE, file.filename)
+    config_file = PACKAGE_DIR / "roles" / "DesignFreeTemplate.yaml"
+
+    logger.info("[DesignFreeTemplate] session=%s lang=%s file=%s config=%s",
+                session_id, _LANGUAGE, file.filename, config_file.name)
 
     config = _make_deep_config()
     slides_dir = None
@@ -295,7 +298,7 @@ async def design_free_template(
     try:
         async with AgentEnv(workspace) as env:
             agent = Design(config=config, agent_env=env, workspace=workspace, language=_LANGUAGE,
-                           config_file=None)
+                           config_file=config_file)
             async for item in agent.loop(req, markdown_file=str(manuscript_path)):
                 if isinstance(item, str):
                     slides_dir = item
