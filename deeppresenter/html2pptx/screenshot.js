@@ -30,6 +30,45 @@ const args = require('minimist')(process.argv.slice(2));
     const page = await browser.newPage();
     await page.setViewportSize({ width, height });
     await page.goto(`file://${htmlFile}`, { waitUntil: 'networkidle' });
+
+    // Measure real content overflow before any cosmetic DOM tweaks below.
+    // scrollWidth/scrollHeight reflect the true laid-out content size even
+    // when body has `overflow:hidden` (which visually clips it, so it would
+    // otherwise be invisible in the screenshot below).
+    const dims = await page.evaluate(() => {
+      const body = document.body;
+      const style = window.getComputedStyle(body);
+      return {
+        width: parseFloat(style.width),
+        height: parseFloat(style.height),
+        scrollWidth: body.scrollWidth,
+        scrollHeight: body.scrollHeight,
+      };
+    });
+
+    // Visualize data-chart-type placeholders for this screenshot only.
+    // The real element is an empty div only consumed by html2pptx.js at PPTX
+    // export time, so it renders as nothing here -- without this, the VLM
+    // sees blank space and may place other content on top of the chart's
+    // reserved area, causing real overlap once exported. This styling is
+    // applied only to this page's live DOM and is never written back to the
+    // source HTML file.
+    await page.evaluate(() => {
+      document.querySelectorAll('[data-chart-type]').forEach((el) => {
+        const type = el.getAttribute('data-chart-type') || 'chart';
+        el.style.backgroundColor = '#E8ECF3';
+        el.style.border = '2px dashed #1F3864';
+        el.style.boxSizing = 'border-box';
+        el.style.display = 'flex';
+        el.style.alignItems = 'center';
+        el.style.justifyContent = 'center';
+        el.style.color = '#1F3864';
+        el.style.fontSize = '20px';
+        el.style.fontWeight = 'bold';
+        el.textContent = `[CHART: ${type}]`;
+      });
+    });
+
     // Append Noto Sans CJK KR as a last-resort fallback on every element so Korean
     // glyphs render even when the slide specifies a Latin-only font (e.g. Arial).
     await page.evaluate(() => {
@@ -49,6 +88,7 @@ const args = require('minimist')(process.argv.slice(2));
     });
     await page.screenshot({ path: outputFile, type: 'jpeg', quality: 85, fullPage: false });
     console.log(`Screenshot saved: ${outputFile}`);
+    console.log(`DIMS:${JSON.stringify(dims)}`);
   } finally {
     await browser.close();
   }
