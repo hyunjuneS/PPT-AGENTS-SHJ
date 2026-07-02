@@ -180,8 +180,8 @@ async def export_pptx(
     )
 
 
-@app.post("/design")
-async def design(
+@app.post("/design-hynix-template")
+async def design_hynix_template(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
 ):
@@ -216,7 +216,7 @@ async def design(
 
     config_file = os.environ.get("DESIGN_CONFIG_FILE") or None
 
-    logger.info("[Design] session=%s lang=%s file=%s config=%s template=%s",
+    logger.info("[DesignHynixTemplate] session=%s lang=%s file=%s config=%s template=%s",
                 session_id, _LANGUAGE, file.filename,
                 Path(config_file).name if config_file else "Design.yaml",
                 bool(template_content))
@@ -237,7 +237,7 @@ async def design(
                     messages_log.append({"role": item.role, "text": item.text[:200]})
             agent.save_history()
     except Exception as e:
-        logger.error("[Design] failed: %s", e)
+        logger.error("[DesignHynixTemplate] failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Design agent failed: {e}")
 
     if slides_dir is None:
@@ -259,8 +259,7 @@ async def design_free_template(
     instruction: str = Form(default="Create a professional presentation."),
 ):
     """[DeepPresenter] 슬라이드 원고 .md → Design 에이전트 → HTML 슬라이드 생성.
-    템플릿 디렉토리 없이 Design 에이전트가 자유롭게 레이아웃을 설계하고,
-    차트는 (네이티브 PPT 차트가 아니라) Plotly.js로 그린다.
+    템플릿 디렉토리 없이 Design 에이전트가 자유롭게 레이아웃을 설계한다.
     DESIGN_CONFIG_FILE env를 무시하고 항상 DesignFreeTemplate.yaml을 사용한다.
     """
     from deeppresenter.agents.design import Design
