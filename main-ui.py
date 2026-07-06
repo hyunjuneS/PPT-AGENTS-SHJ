@@ -74,10 +74,12 @@ async def health():
 async def research(
     file: UploadFile = File(...),
     instruction: str = Form(...),
-    num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, 기본 10장)"),
+    num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto=false일 때만 사용)"),
+    auto: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
 ):
     """[DeepPresenter] .md 파일 + instruction → Research 에이전트로 슬라이드 원고 생성."""
     from deeppresenter.agents.env import AgentEnv
+    from deeppresenter.agents.page_planner import decide_num_pages
     from deeppresenter.agents.research import Research
     from deeppresenter.utils.constants import WORKSPACE_BASE
     from deeppresenter.utils.typings import InputRequest
@@ -91,6 +93,13 @@ async def research(
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
 
+    config = _make_deep_config()
+
+    if auto:
+        resolved_num_pages = await decide_num_pages(config.long_context_model, md_content, instruction)
+    else:
+        resolved_num_pages = num_pages
+
     # 세션별 workspace 생성
     session_id = str(uuid.uuid4())[:8]
     workspace = WORKSPACE_BASE / session_id
@@ -103,14 +112,15 @@ async def research(
     req = InputRequest(
         instruction=instruction,
         attachments=[str(attachment_path)],
-        num_pages=str(num_pages),
+        num_pages=str(resolved_num_pages),
         language=_LANGUAGE,
     )
 
-    logger.info("[Research] session=%s lang=%s num_pages=%d instruction=%r",
-                session_id, _LANGUAGE, num_pages, instruction[:80])
+    logger.info(
+        "[Research] session=%s lang=%s auto=%s num_pages_input=%d resolved_num_pages=%d instruction=%r",
+        session_id, _LANGUAGE, auto, num_pages, resolved_num_pages, instruction[:80],
+    )
 
-    config = _make_deep_config()
     manuscript_path = None
     messages_log = []
 
@@ -135,7 +145,11 @@ async def research(
         path=manuscript_path,
         media_type="text/markdown",
         filename=Path(manuscript_path).name,
-        headers={"X-Session-Id": session_id, "X-Turns": str(len(messages_log))},
+        headers={
+            "X-Session-Id": session_id,
+            "X-Turns": str(len(messages_log)),
+            "X-Num-Pages": str(resolved_num_pages),
+        },
     )
 
 
