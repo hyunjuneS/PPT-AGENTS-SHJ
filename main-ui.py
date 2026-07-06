@@ -89,7 +89,7 @@ async def research(
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto=false일 때만 사용)"),
     auto: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
 ):
-    """[DeepPresenter] .md 파일 + instruction → Research 에이전트로 슬라이드 원고 생성."""
+    """.md 파일 + instruction → Research 에이전트로 슬라이드 원고 생성."""
     from deeppresenter.agents.env import AgentEnv
     from deeppresenter.agents.page_planner import decide_num_pages
     from deeppresenter.agents.research import Research
@@ -211,7 +211,7 @@ async def design_hynix_template(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
 ):
-    """[DeepPresenter] 슬라이드 원고 .md → Design 에이전트 → HTML 슬라이드 생성."""
+    """슬라이드 원고 .md → Design 에이전트 → HTML 슬라이드 생성."""
     from deeppresenter.agents.design import Design
     from deeppresenter.agents.env import AgentEnv
     from deeppresenter.utils.constants import WORKSPACE_BASE
@@ -284,7 +284,7 @@ async def design_free_template(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
 ):
-    """[DeepPresenter] 슬라이드 원고 .md → Design 에이전트 → HTML 슬라이드 생성.
+    """슬라이드 원고 .md → Design 에이전트 → HTML 슬라이드 생성.
     템플릿 디렉토리 없이 Design 에이전트가 자유롭게 레이아웃을 설계한다.
     DESIGN_CONFIG_FILE env를 무시하고 항상 DesignFreeTemplate.yaml을 사용한다.
     """
