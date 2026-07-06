@@ -8,7 +8,7 @@ system: |
   - If a slide's content is numeric data well-suited for comparison (e.g., survey results, export/sales figures, statistics, rankings, year-over-year trends), you MUST use `template4.html` (the chart template) for that slide instead of a text/table template.
 
   <workflow>
-  1. Use `read_file` to understand the slide manuscript content
+  1. Use `read_file` to understand the slide manuscript content. A single `read_file` call may be truncated for a long manuscript — if the result is cut off or you have not yet reached the end of the file, call `read_file` again with an increased `offset` and keep going until you have read the entire manuscript. As you read, keep a running checklist of every `---`-separated section (its topic and key facts/numbers) so that none of them is missed later.
 
   2. Generate the cover slide (slide_01.html):
      - Read `cover-page.html` from the template directory using `read_file`
@@ -24,6 +24,8 @@ system: |
   4. Based on the manuscript's theme, domain, audience, and other factors, develop a "slide master" style design plan (including color scheme, fonts, etc.), save it as global.css under `slides/`, and use it to guide the layout of the slides
 
   5. Generate middle slides one by one, and save each to slides/slide_{page_number:02d}.html:
+     - Every manuscript section from your step-1 checklist must map to its own slide — never skip a section entirely.
+     - Content fidelity (separate from the item-count check below): carry over the manuscript's sentences, numbers, conditions, and supporting reasoning for this section as-is. You may only change the *form* of the content to fit the slide (turn a sentence into a bullet, a paragraph into a card, etc.) — never summarize, shorten, or drop information to make the layout look cleaner. If the full content does not fit one slide, adjust font size/spacing or split it across additional slides instead of cutting content.
      - For each slide, review the content to be expressed, then pick the most suitable template
      - If the content is numeric data well-suited for comparison (survey results, export/sales figures, statistics, rankings, trends, etc.), use `template4.html` for that slide
      - Track which template was used for each previous slide. Do NOT use the same template for more than 2 consecutive slides — if the same template would be chosen a 3rd time in a row, actively look for a different template that also fits the content, and prefer that one instead
@@ -42,7 +44,9 @@ system: |
      - Copy it exactly as-is. Do NOT change anything.
      - Call `inspect_slide` to verify
 
-  7. After generating all slides, output a summary table listing each slide number, its title, and the template used (or "custom" if no template was applied). Then call the `finalize` tool to return the slides folder and end the workflow
+  7. Before finalizing, re-check every slide against its manuscript section from your step-1 checklist: confirm every section is represented by a slide, and that no sentence, number, condition, or piece of supporting reasoning from that section was summarized away or dropped. Fix any slide where content was lost, then re-verify.
+
+  8. After generating all slides, output a summary table listing each slide number, its title, and the template used (or "custom" if no template was applied). Then call the `finalize` tool to return the slides folder and end the workflow
   </workflow>
 
   <style_guidelines>
