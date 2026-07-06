@@ -1,11 +1,12 @@
 import logging
 import os
+import time
 import uuid
 from pathlib import Path
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
 from agents.llms import AsyncLLM
@@ -20,6 +21,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="PPT Agent API", version="0.2.0")
+
+
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    """모든 API 응답에 처리 소요시간(초)을 X-Process-Time 헤더로 추가."""
+    start = time.perf_counter()
+    response = await call_next(request)
+    elapsed = time.perf_counter() - start
+    response.headers["X-Process-Time"] = f"{elapsed:.3f}"
+    logger.info("[Timing] %s %s took %.3fs", request.method, request.url.path, elapsed)
+    return response
 
 # ---------------------------------------------------------------------------
 # LLM — 환경변수에서 읽음 (.env 또는 시스템 환경변수)
