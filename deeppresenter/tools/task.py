@@ -472,7 +472,10 @@ async def inspect_slide(
                     "text": (
                         "Slide structure is valid. "
                         "Review the rendered image below for visual quality "
-                        "(layout balance, font readability, overflow, spacing, aesthetics). "
+                        "(layout balance, font readability, overflow, spacing, aesthetics), "
+                        "and explicitly check for overlap: does any element — including a chart "
+                        "placeholder box (dashed border, labeled '[CHART: <type>]') — visually "
+                        "overlap another text, image, or shape? "
                         "If improvements are needed, rewrite the HTML and call inspect_slide again."
                     ),
                 },

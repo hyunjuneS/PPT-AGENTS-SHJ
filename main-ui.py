@@ -1,11 +1,12 @@
 import logging
 import os
+import time
 import uuid
 from pathlib import Path
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
 from agents.llms import AsyncLLM
@@ -20,6 +21,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="PPT Agent API", version="0.2.0")
+
+
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    """모든 API 응답에 처리 소요시간(초)을 X-Process-Time 헤더로 추가."""
+    start = time.perf_counter()
+    response = await call_next(request)
+    elapsed = time.perf_counter() - start
+    response.headers["X-Process-Time"] = f"{elapsed:.3f}"
+    logger.info("[Timing] %s %s took %.3fs", request.method, request.url.path, elapsed)
+    return response
 
 # ---------------------------------------------------------------------------
 # LLM — 환경변수에서 읽음 (.env 또는 시스템 환경변수)
@@ -74,10 +86,12 @@ async def health():
 async def research(
     file: UploadFile = File(...),
     instruction: str = Form(...),
-    num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, 기본 10장)"),
+    num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto=false일 때만 사용)"),
+    auto: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
 ):
-    """[DeepPresenter] .md 파일 + instruction → Research 에이전트로 슬라이드 원고 생성."""
+    """.md 파일 + instruction → Research 에이전트로 슬라이드 원고 생성."""
     from deeppresenter.agents.env import AgentEnv
+    from deeppresenter.agents.page_planner import decide_num_pages
     from deeppresenter.agents.research import Research
     from deeppresenter.utils.constants import WORKSPACE_BASE
     from deeppresenter.utils.typings import InputRequest
@@ -91,6 +105,13 @@ async def research(
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
 
+    config = _make_deep_config()
+
+    if auto:
+        resolved_num_pages = await decide_num_pages(config.long_context_model, md_content, instruction)
+    else:
+        resolved_num_pages = num_pages
+
     # 세션별 workspace 생성
     session_id = str(uuid.uuid4())[:8]
     workspace = WORKSPACE_BASE / session_id
@@ -103,14 +124,15 @@ async def research(
     req = InputRequest(
         instruction=instruction,
         attachments=[str(attachment_path)],
-        num_pages=str(num_pages),
+        num_pages=str(resolved_num_pages),
         language=_LANGUAGE,
     )
 
-    logger.info("[Research] session=%s lang=%s num_pages=%d instruction=%r",
-                session_id, _LANGUAGE, num_pages, instruction[:80])
+    logger.info(
+        "[Research] session=%s lang=%s auto=%s num_pages_input=%d resolved_num_pages=%d instruction=%r",
+        session_id, _LANGUAGE, auto, num_pages, resolved_num_pages, instruction[:80],
+    )
 
-    config = _make_deep_config()
     manuscript_path = None
     messages_log = []
 
@@ -135,7 +157,11 @@ async def research(
         path=manuscript_path,
         media_type="text/markdown",
         filename=Path(manuscript_path).name,
-        headers={"X-Session-Id": session_id, "X-Turns": str(len(messages_log))},
+        headers={
+            "X-Session-Id": session_id,
+            "X-Turns": str(len(messages_log)),
+            "X-Num-Pages": str(resolved_num_pages),
+        },
     )
 
 
@@ -185,7 +211,7 @@ async def design_hynix_template(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
 ):
-    """[DeepPresenter] 슬라이드 원고 .md → Design 에이전트 → HTML 슬라이드 생성."""
+    """슬라이드 원고 .md → Design 에이전트 → HTML 슬라이드 생성."""
     from deeppresenter.agents.design import Design
     from deeppresenter.agents.env import AgentEnv
     from deeppresenter.utils.constants import WORKSPACE_BASE
@@ -258,7 +284,7 @@ async def design_free_template(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
 ):
-    """[DeepPresenter] 슬라이드 원고 .md → Design 에이전트 → HTML 슬라이드 생성.
+    """슬라이드 원고 .md → Design 에이전트 → HTML 슬라이드 생성.
     템플릿 디렉토리 없이 Design 에이전트가 자유롭게 레이아웃을 설계한다.
     DESIGN_CONFIG_FILE env를 무시하고 항상 DesignFreeTemplate.yaml을 사용한다.
     """
