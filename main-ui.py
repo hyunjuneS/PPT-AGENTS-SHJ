@@ -211,9 +211,9 @@ async def design_hynix_template(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
 ):
-    """슬라이드 원고 .md → Design 에이전트 → HTML 슬라이드 생성."""
-    from deeppresenter.agents.design import Design
-    from deeppresenter.agents.env import AgentEnv
+    """슬라이드 원고 .md → Design 에이전트(LangGraph 엔진) → HTML 슬라이드 생성."""
+    from deeppresenter.graph.callbacks import get_langfuse_handler
+    from deeppresenter.graph.design_graph import run_design_graph
     from deeppresenter.utils.constants import WORKSPACE_BASE
     from deeppresenter.utils.typings import InputRequest
 
@@ -248,34 +248,31 @@ async def design_hynix_template(
                 bool(template_content))
 
     config = _make_deep_config()
-    slides_dir = None
-    messages_log = []
 
     try:
-        async with AgentEnv(workspace) as env:
-            agent = Design(config=config, agent_env=env, workspace=workspace, language=_LANGUAGE,
-                           config_file=config_file)
-            async for item in agent.loop(req, markdown_file=str(manuscript_path), template_content=template_content):
-                if isinstance(item, str):
-                    slides_dir = item
-                    break
-                else:
-                    messages_log.append({"role": item.role, "text": item.text[:200]})
-            agent.save_history()
+        result = await run_design_graph(
+            config=config,
+            workspace=workspace,
+            req=req,
+            markdown_file=str(manuscript_path),
+            template_content=template_content,
+            config_file=config_file,
+            language=_LANGUAGE,
+            langfuse_handler=get_langfuse_handler(session_id),
+            session_id=session_id,
+        )
     except Exception as e:
         logger.error("[DesignHynixTemplate] failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Design agent failed: {e}")
 
-    if slides_dir is None:
-        raise HTTPException(status_code=500, detail="Design agent did not produce a slides directory.")
-
+    slides_dir = result.slides_dir
     html_files = sorted(Path(slides_dir).glob("slide_*.html"))
     return JSONResponse(content={
         "session_id": session_id,
         "slides_dir": slides_dir,
         "slide_count": len(html_files),
         "slides": [str(f) for f in html_files],
-        "turns": len(messages_log),
+        "turns": len(result.messages_log),
     })
 
 
@@ -284,12 +281,12 @@ async def design_free_template(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
 ):
-    """슬라이드 원고 .md → Design 에이전트 → HTML 슬라이드 생성.
+    """슬라이드 원고 .md → Design 에이전트(LangGraph 엔진) → HTML 슬라이드 생성.
     템플릿 디렉토리 없이 Design 에이전트가 자유롭게 레이아웃을 설계한다.
     DESIGN_CONFIG_FILE env를 무시하고 항상 DesignFreeTemplate.yaml을 사용한다.
     """
-    from deeppresenter.agents.design import Design
-    from deeppresenter.agents.env import AgentEnv
+    from deeppresenter.graph.callbacks import get_langfuse_handler
+    from deeppresenter.graph.design_graph import run_design_graph
     from deeppresenter.utils.constants import PACKAGE_DIR, WORKSPACE_BASE
     from deeppresenter.utils.typings import InputRequest
 
@@ -317,34 +314,30 @@ async def design_free_template(
                 session_id, _LANGUAGE, file.filename, config_file.name)
 
     config = _make_deep_config()
-    slides_dir = None
-    messages_log = []
 
     try:
-        async with AgentEnv(workspace) as env:
-            agent = Design(config=config, agent_env=env, workspace=workspace, language=_LANGUAGE,
-                           config_file=config_file)
-            async for item in agent.loop(req, markdown_file=str(manuscript_path)):
-                if isinstance(item, str):
-                    slides_dir = item
-                    break
-                else:
-                    messages_log.append({"role": item.role, "text": item.text[:200]})
-            agent.save_history()
+        result = await run_design_graph(
+            config=config,
+            workspace=workspace,
+            req=req,
+            markdown_file=str(manuscript_path),
+            config_file=config_file,
+            language=_LANGUAGE,
+            langfuse_handler=get_langfuse_handler(session_id),
+            session_id=session_id,
+        )
     except Exception as e:
         logger.error("[DesignFreeTemplate] failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Design agent failed: {e}")
 
-    if slides_dir is None:
-        raise HTTPException(status_code=500, detail="Design agent did not produce a slides directory.")
-
+    slides_dir = result.slides_dir
     html_files = sorted(Path(slides_dir).glob("slide_*.html"))
     return JSONResponse(content={
         "session_id": session_id,
         "slides_dir": slides_dir,
         "slide_count": len(html_files),
         "slides": [str(f) for f in html_files],
-        "turns": len(messages_log),
+        "turns": len(result.messages_log),
     })
 
 
