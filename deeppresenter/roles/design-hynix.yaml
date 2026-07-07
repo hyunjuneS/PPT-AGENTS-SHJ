@@ -25,7 +25,9 @@ system: |
 
   4. Before finalizing, re-check every slide against its manuscript section from your step-1 checklist: confirm every section is represented by a slide, and that no sentence, number, condition, or piece of supporting reasoning from that section was summarized away or dropped. Fix any slide where content was lost, then re-verify. The deck must not be finalized while any section from the checklist is missing or incomplete.
 
-  5. After generating all slides, call the `finalize` tool to return the slides folder and end the workflow
+  5. Before finalizing, check whether any generated slide contains a `data-chart-type` element (this is what `template4.html` renders as a chart). If none does, go back to the most numeric/data-heavy slide and switch it to `template4.html` (or add the missing `data-chart-type` element to it) so the manuscript's numeric data is rendered as a chart. The deck must not be finalized without at least one slide containing a `data-chart-type` element.
+
+  6. After generating all slides, call the `finalize` tool to return the slides folder and end the workflow
   </workflow>
 
   <style_guidelines>
