@@ -89,10 +89,10 @@ async def research(
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto=false일 때만 사용)"),
     auto: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
 ):
-    """.md 파일 + instruction → Research 에이전트로 슬라이드 원고 생성."""
-    from deeppresenter.agents.env import AgentEnv
+    """.md 파일 + instruction → Research 에이전트(LangGraph 엔진)로 슬라이드 원고 생성."""
     from deeppresenter.agents.page_planner import decide_num_pages
-    from deeppresenter.agents.research import Research
+    from deeppresenter.graph.callbacks import get_langfuse_handler
+    from deeppresenter.graph.research_graph import run_research_graph
     from deeppresenter.utils.constants import WORKSPACE_BASE
     from deeppresenter.utils.typings import InputRequest
 
@@ -133,25 +133,21 @@ async def research(
         session_id, _LANGUAGE, auto, num_pages, resolved_num_pages, instruction[:80],
     )
 
-    manuscript_path = None
-    messages_log = []
-
     try:
-        async with AgentEnv(workspace) as env:
-            agent = Research(config=config, agent_env=env, workspace=workspace, language=_LANGUAGE)
-            async for item in agent.loop(req):
-                if isinstance(item, str):
-                    manuscript_path = item
-                    break
-                else:
-                    messages_log.append({"role": item.role, "text": item.text[:200]})
-            agent.save_history()
+        result = await run_research_graph(
+            config=config,
+            workspace=workspace,
+            req=req,
+            language=_LANGUAGE,
+            langfuse_handler=get_langfuse_handler(session_id),
+            session_id=session_id,
+        )
     except Exception as e:
         logger.error("[Research] failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Research agent failed: {e}")
 
-    if manuscript_path is None:
-        raise HTTPException(status_code=500, detail="Research agent did not produce a manuscript.")
+    manuscript_path = result.manuscript_path
+    messages_log = result.messages_log
 
     return FileResponse(
         path=manuscript_path,
