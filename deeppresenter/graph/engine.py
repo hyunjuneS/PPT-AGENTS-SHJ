@@ -4,6 +4,7 @@ echoes its own outcome). Kept independent of the old engine; Research/Planner
 keep running on deeppresenter/agents/ untouched during this pilot.
 """
 
+import asyncio
 import os
 import time
 from collections.abc import Sequence
@@ -15,8 +16,14 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 
 from deeppresenter.graph.state import GraphState
-from deeppresenter.utils.constants import HALF_BUDGET_NOTICE_MSG, URGENT_BUDGET_NOTICE_MSG
-from deeppresenter.utils.log import show_agent_done, show_agent_turn, show_tool_call, show_tool_result
+from deeppresenter.utils.constants import HALF_BUDGET_NOTICE_MSG, RETRY_TIMES, URGENT_BUDGET_NOTICE_MSG
+from deeppresenter.utils.log import (
+    logging_openai_exceptions,
+    show_agent_done,
+    show_agent_turn,
+    show_tool_call,
+    show_tool_result,
+)
 
 
 def _has_image(message: BaseMessage) -> bool:
@@ -65,6 +72,30 @@ def _prepend_notice(message: BaseMessage, notice_block: dict) -> BaseMessage:
     return message.model_copy(update={"content": new_content})
 
 
+async def _invoke_with_retry(model_with_tools, messages, model_name: str, retry_times: int = RETRY_TIMES):
+    """Port of the old engine's LLM.run() retry loop
+    (deeppresenter/utils/config.py:85-113): retry on any exception, AND on a
+    genuinely empty response (no content, no tool_calls) — the same failure
+    mode this app has hit before ("Empty response from model" / "All 3
+    retries failed") — with the same exponential backoff (2**attempt, capped
+    at 30s) and per-attempt warning log the old engine had. Without this, an
+    empty response would silently become a no-op turn that loops straight
+    back to another LLM call with zero delay and no logging, instead of
+    retrying with backoff and then failing loudly."""
+    errors: list[str] = []
+    for attempt in range(retry_times):
+        try:
+            response = await model_with_tools.ainvoke(messages)
+            assert response.content or response.tool_calls, "Empty response from model"
+            return response
+        except Exception as e:
+            errors.append(str(e))
+            logging_openai_exceptions(model_name, e)
+            if attempt < retry_times - 1:
+                await asyncio.sleep(min(2 ** attempt, 30))
+    raise ValueError(f"All {retry_times} retries failed:\n" + "\n".join(errors))
+
+
 def is_finalize_confirmed(
     ai_message: AIMessage, tool_messages: list[ToolMessage]
 ) -> tuple[bool, str | None]:
@@ -94,6 +125,7 @@ def build_graph(
     # old engine never lets a tool exception crash the outer loop.
     tool_node = ToolNode(list(tools), handle_tool_errors=True)
     model_with_tools = chat_model.bind_tools(list(tools))
+    model_name = getattr(chat_model, "model_name", None) or getattr(chat_model, "model", "unknown")
     start_time = time.time()
 
     async def agent_node(state: GraphState) -> dict:
@@ -118,7 +150,7 @@ def build_graph(
             updates.append(warned_last)
 
         show_agent_turn(agent_name, turn_count, max_turns)
-        response = await model_with_tools.ainvoke(messages)
+        response = await _invoke_with_retry(model_with_tools, messages, model_name)
 
         for tc in response.tool_calls or []:
             show_tool_call(tc["name"], tc["args"])
