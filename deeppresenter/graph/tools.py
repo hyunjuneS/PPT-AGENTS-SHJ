@@ -61,7 +61,7 @@ def _build_args_model(spec: dict, func: Callable) -> type[BaseModel]:
             default = sig.parameters[name].default if name in sig.parameters else None
             if default is inspect.Parameter.empty:
                 default = None
-            fields[name] = (py_type | None, Field(default=default, description=description))
+            fields[name] = (py_type, Field(default=default, description=description))
 
     model_name = "".join(w.capitalize() for w in spec["function"]["name"].split("_")) + "Args"
     return create_model(model_name, **fields)
