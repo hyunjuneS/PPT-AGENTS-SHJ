@@ -1,8 +1,10 @@
+import json
 import logging
 import os
 import time
 import uuid
 from pathlib import Path
+from typing import Literal
 
 import uvicorn
 from dotenv import load_dotenv
@@ -59,17 +61,70 @@ logger.info("LLM configured: research=%s  design=%s  language=%s",
             _llm, _design_llm, _LANGUAGE)
 
 
-def _make_deep_config():
-    """DeepPresenterConfig을 현재 _llm 설정으로 생성."""
+def _make_deep_config(research_llm=None, design_llm=None):
+    """DeepPresenterConfig을 생성. research_llm/design_llm을 넘기면 해당 티어로
+    선택된 LLM을 쓰고, 안 넘기면 기존처럼 정적 글로벌(_llm/_design_llm)에서 만든다."""
     from deeppresenter.utils.config import DeepPresenterConfig, LLM
 
     def _to_deep_llm(llm: AsyncLLM) -> LLM:
         return LLM(model=llm.model, base_url=llm.base_url, api_key=llm.api_key)
 
+    r = research_llm or _to_deep_llm(_llm)
+    d = design_llm or _to_deep_llm(_design_llm)
     return DeepPresenterConfig(
-        research_agent=_to_deep_llm(_llm),
-        design_agent=_to_deep_llm(_design_llm),
-        long_context_model=_to_deep_llm(_llm),
+        research_agent=r,
+        design_agent=d,
+        long_context_model=r,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 모델 티어 (big/middle/small) — API 요청의 model_size 파라미터로 선택
+# ---------------------------------------------------------------------------
+_MODEL_TIER_ENV = {"big": "MODEL_BIG", "middle": "MODEL_MIDDLE", "small": "MODEL_SMALL"}
+
+
+def _resolve_model_name(model_size: str) -> str:
+    model_name = os.environ.get(_MODEL_TIER_ENV[model_size])
+    if model_name:
+        return model_name
+    if model_size == "big":
+        # MODEL_BIG 미설정 시 기존 동작(DESIGN_MODEL_NAME → MODEL_NAME)으로 폴백
+        return os.environ.get("DESIGN_MODEL_NAME") or os.environ.get("MODEL_NAME", "claude-opus-4-5")
+    raise HTTPException(
+        status_code=400,
+        detail=f"{_MODEL_TIER_ENV[model_size]} is not configured in .env",
+    )
+
+
+def _resolve_api_key(model_size: str) -> str:
+    if model_size == "big":
+        return os.environ.get("OPENAI_API_KEY_BIG") or os.environ.get("OPENAI_API_KEY", "")
+    return os.environ.get("OPENAI_API_KEY", "")
+
+
+def _parse_provider_request_body(raw: str | None) -> dict:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid provider_request_body JSON: {e}")
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=400, detail="provider_request_body must be a JSON object")
+    return parsed
+
+
+def _resolve_tiered_llm(model_size: str, provider_request_body: str | None):
+    """model_size(big/middle/small)와 provider_request_body(JSON 문자열)로부터
+    deeppresenter.utils.config.LLM 인스턴스를 만든다."""
+    from deeppresenter.utils.config import LLM
+
+    return LLM(
+        model=_resolve_model_name(model_size),
+        base_url=os.environ.get("OPENAI_BASE_URL") or None,
+        api_key=_resolve_api_key(model_size),
+        sampling_parameters=_parse_provider_request_body(provider_request_body),
     )
 
 
@@ -140,6 +195,8 @@ async def research(
     instruction: str = Form(...),
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto=false일 때만 사용)"),
     auto: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
+    model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
+    provider_request_body: str | None = Form(default=None, description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
 ):
     """.md 파일 + instruction → Research 에이전트(LangGraph 엔진)로 슬라이드 원고 생성."""
     from deeppresenter.agents.page_planner import decide_num_pages
@@ -157,7 +214,8 @@ async def research(
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
 
-    config = _make_deep_config()
+    tiered_llm = _resolve_tiered_llm(model_size, provider_request_body)
+    config = _make_deep_config(research_llm=tiered_llm)
 
     if auto:
         resolved_num_pages = await decide_num_pages(config.long_context_model, md_content, instruction)
@@ -261,6 +319,8 @@ async def design_hynix_template(
     export: bool = Form(default=False, description="true면 슬라이드 생성 직후 같은 요청 안에서 PPTX로 변환해 바로 반환 (레플리카가 여러 대일 때 별도 /export 호출이 다른 레플리카로 라우팅되는 문제 회피)"),
     export_filename: str = Form(default="slides.pptx"),
     soft: bool = Form(default=True, description="export=true일 때만 사용. 검증 경고를 로그로만 남기고 변환 계속할지 여부"),
+    model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
+    provider_request_body: str | None = Form(default=None, description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
 ):
     """슬라이드 원고 .md → Design 에이전트(LangGraph 엔진) → HTML 슬라이드 생성."""
     from deeppresenter.graph.callbacks import get_langfuse_handler
@@ -298,7 +358,8 @@ async def design_hynix_template(
                 Path(config_file).name if config_file else "Design.yaml",
                 bool(template_content))
 
-    config = _make_deep_config()
+    tiered_llm = _resolve_tiered_llm(model_size, provider_request_body)
+    config = _make_deep_config(design_llm=tiered_llm)
 
     try:
         result = await run_design_graph(
@@ -326,6 +387,8 @@ async def design_free_template(
     export: bool = Form(default=False, description="true면 슬라이드 생성 직후 같은 요청 안에서 PPTX로 변환해 바로 반환 (레플리카가 여러 대일 때 별도 /export 호출이 다른 레플리카로 라우팅되는 문제 회피)"),
     export_filename: str = Form(default="slides.pptx"),
     soft: bool = Form(default=True, description="export=true일 때만 사용. 검증 경고를 로그로만 남기고 변환 계속할지 여부"),
+    model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
+    provider_request_body: str | None = Form(default=None, description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
 ):
     """슬라이드 원고 .md → Design 에이전트(LangGraph 엔진) → HTML 슬라이드 생성.
     템플릿 디렉토리 없이 Design 에이전트가 자유롭게 레이아웃을 설계한다.
@@ -359,7 +422,8 @@ async def design_free_template(
     logger.info("[DesignFreeTemplate] session=%s lang=%s file=%s config=%s",
                 session_id, _LANGUAGE, file.filename, config_file.name)
 
-    config = _make_deep_config()
+    tiered_llm = _resolve_tiered_llm(model_size, provider_request_body)
+    config = _make_deep_config(design_llm=tiered_llm)
 
     try:
         result = await run_design_graph(
