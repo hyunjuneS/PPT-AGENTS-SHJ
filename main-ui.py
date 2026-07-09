@@ -73,6 +73,58 @@ def _make_deep_config():
     )
 
 
+async def _design_response(result, session_id: str, export: bool, export_filename: str, soft: bool):
+    """Shared response-building for the two Design endpoints.
+
+    When export=True, converts the generated slides to PPTX in the same
+    request (same replica) instead of requiring a separate /export call —
+    with multiple replicas behind a load balancer and no shared storage,
+    that follow-up call can land on a different replica than the one that
+    generated slides_dir and fail with "slides_dir not found" even though
+    the files genuinely exist, just on another replica's local disk.
+    Returns the PPTX directly; a FileResponse can't also carry a JSON body,
+    so slide metadata goes in headers instead (same pattern /research
+    already uses for its FileResponse).
+    """
+    from deeppresenter.tools.export import html_slides_to_pptx
+
+    slides_dir = result.slides_dir
+    html_files = sorted(Path(slides_dir).glob("slide_*.html"))
+
+    if not export:
+        return JSONResponse(content={
+            "session_id": session_id,
+            "slides_dir": slides_dir,
+            "slide_count": len(html_files),
+            "slides": [str(f) for f in html_files],
+            "turns": len(result.messages_log),
+        })
+
+    pptx_path = Path(slides_dir) / export_filename
+    try:
+        await html_slides_to_pptx(
+            slides_dir=slides_dir,
+            output_path=str(pptx_path),
+            aspect_ratio="16:9",
+            soft=soft,
+        )
+    except Exception as e:
+        logger.error("[Design] export failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Export failed: {e}")
+
+    return FileResponse(
+        path=str(pptx_path),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=export_filename,
+        headers={
+            "X-Session-Id": session_id,
+            "X-Slides-Dir": slides_dir,
+            "X-Slide-Count": str(len(html_files)),
+            "X-Turns": str(len(result.messages_log)),
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -206,6 +258,9 @@ async def export_pptx(
 async def design_hynix_template(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
+    export: bool = Form(default=False, description="true면 슬라이드 생성 직후 같은 요청 안에서 PPTX로 변환해 바로 반환 (레플리카가 여러 대일 때 별도 /export 호출이 다른 레플리카로 라우팅되는 문제 회피)"),
+    export_filename: str = Form(default="slides.pptx"),
+    soft: bool = Form(default=True, description="export=true일 때만 사용. 검증 경고를 로그로만 남기고 변환 계속할지 여부"),
 ):
     """슬라이드 원고 .md → Design 에이전트(LangGraph 엔진) → HTML 슬라이드 생성."""
     from deeppresenter.graph.callbacks import get_langfuse_handler
@@ -261,21 +316,16 @@ async def design_hynix_template(
         logger.error("[DesignHynixTemplate] failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Design agent failed: {e}")
 
-    slides_dir = result.slides_dir
-    html_files = sorted(Path(slides_dir).glob("slide_*.html"))
-    return JSONResponse(content={
-        "session_id": session_id,
-        "slides_dir": slides_dir,
-        "slide_count": len(html_files),
-        "slides": [str(f) for f in html_files],
-        "turns": len(result.messages_log),
-    })
+    return await _design_response(result, session_id, export, export_filename, soft)
 
 
 @app.post("/design-free-template")
 async def design_free_template(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
+    export: bool = Form(default=False, description="true면 슬라이드 생성 직후 같은 요청 안에서 PPTX로 변환해 바로 반환 (레플리카가 여러 대일 때 별도 /export 호출이 다른 레플리카로 라우팅되는 문제 회피)"),
+    export_filename: str = Form(default="slides.pptx"),
+    soft: bool = Form(default=True, description="export=true일 때만 사용. 검증 경고를 로그로만 남기고 변환 계속할지 여부"),
 ):
     """슬라이드 원고 .md → Design 에이전트(LangGraph 엔진) → HTML 슬라이드 생성.
     템플릿 디렉토리 없이 Design 에이전트가 자유롭게 레이아웃을 설계한다.
@@ -326,15 +376,7 @@ async def design_free_template(
         logger.error("[DesignFreeTemplate] failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Design agent failed: {e}")
 
-    slides_dir = result.slides_dir
-    html_files = sorted(Path(slides_dir).glob("slide_*.html"))
-    return JSONResponse(content={
-        "session_id": session_id,
-        "slides_dir": slides_dir,
-        "slide_count": len(html_files),
-        "slides": [str(f) for f in html_files],
-        "turns": len(result.messages_log),
-    })
+    return await _design_response(result, session_id, export, export_filename, soft)
 
 
 # ---------------------------------------------------------------------------
