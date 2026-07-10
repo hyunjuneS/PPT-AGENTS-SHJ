@@ -112,27 +112,27 @@ logger.info(
 )
 
 
-def _parse_provider_request_body(raw: str | None) -> dict:
+def _parse_additional_request(raw: str | None) -> dict:
     if not raw:
         return {}
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid provider_request_body JSON: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid additional_request JSON: {e}")
     if not isinstance(parsed, dict):
-        raise HTTPException(status_code=400, detail="provider_request_body must be a JSON object")
+        raise HTTPException(status_code=400, detail="additional_request must be a JSON object")
     return parsed
 
 
-def _resolve_tiered_llm(model_size: str, provider_request_body: str | None) -> LLM:
-    """시작 시점에 만들어둔 티어별 LLM(_TIER_LLMS)에 provider_request_body를 병합해 반환."""
+def _resolve_tiered_llm(model_size: str, additional_request: str | None) -> LLM:
+    """시작 시점에 만들어둔 티어별 LLM(_TIER_LLMS)에 additional_request를 병합해 반환."""
     base = _TIER_LLMS[model_size]
     if base is None:
         raise HTTPException(
             status_code=400,
             detail=f"{_MODEL_TIER_ENV[model_size]} is not configured in .env",
         )
-    params = _parse_provider_request_body(provider_request_body)
+    params = _parse_additional_request(additional_request)
     if not params:
         return base
     return base.model_copy(update={"sampling_parameters": {**base.sampling_parameters, **params}})
@@ -206,7 +206,7 @@ async def research(
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto=false일 때만 사용)"),
     auto: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
-    provider_request_body: str | None = Form(default=None, description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
+    additional_request: str | None = Form(default=None, description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
 ):
     """.md 파일 + instruction → Research 에이전트(LangGraph 엔진)로 슬라이드 원고 생성."""
     from deeppresenter.agents.page_planner import decide_num_pages
@@ -224,7 +224,7 @@ async def research(
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
 
-    tiered_llm = _resolve_tiered_llm(model_size, provider_request_body)
+    tiered_llm = _resolve_tiered_llm(model_size, additional_request)
     config = _make_deep_config(research_llm=tiered_llm)
 
     if auto:
@@ -329,7 +329,7 @@ async def design_hynix_template(
     export: bool = Form(default=True, description="true(기본)면 슬라이드 생성 직후 같은 요청 안에서 PPTX로 변환해 바로 반환 (레플리카가 여러 대일 때 별도 /export 호출이 다른 레플리카로 라우팅되는 문제 회피)"),
     export_filename: str = Form(default="slides.pptx"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
-    provider_request_body: str | None = Form(default=None, description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
+    additional_request: str | None = Form(default=None, description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
 ):
     """슬라이드 원고 .md → Design 에이전트(LangGraph 엔진) → HTML 슬라이드 생성."""
     from deeppresenter.graph.callbacks import get_langfuse_handler
@@ -367,7 +367,7 @@ async def design_hynix_template(
                 Path(config_file).name if config_file else "Design.yaml",
                 bool(template_content))
 
-    tiered_llm = _resolve_tiered_llm(model_size, provider_request_body)
+    tiered_llm = _resolve_tiered_llm(model_size, additional_request)
     config = _make_deep_config(design_llm=tiered_llm)
 
     try:
@@ -396,7 +396,7 @@ async def design_free_template(
     export: bool = Form(default=True, description="true(기본)면 슬라이드 생성 직후 같은 요청 안에서 PPTX로 변환해 바로 반환 (레플리카가 여러 대일 때 별도 /export 호출이 다른 레플리카로 라우팅되는 문제 회피)"),
     export_filename: str = Form(default="slides.pptx"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
-    provider_request_body: str | None = Form(default=None, description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
+    additional_request: str | None = Form(default=None, description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
 ):
     """슬라이드 원고 .md → Design 에이전트(LangGraph 엔진) → HTML 슬라이드 생성.
     템플릿 디렉토리 없이 Design 에이전트가 자유롭게 레이아웃을 설계한다.
@@ -430,7 +430,7 @@ async def design_free_template(
     logger.info("[DesignFreeTemplate] session=%s lang=%s file=%s config=%s",
                 session_id, _LANGUAGE, file.filename, config_file.name)
 
-    tiered_llm = _resolve_tiered_llm(model_size, provider_request_body)
+    tiered_llm = _resolve_tiered_llm(model_size, additional_request)
     config = _make_deep_config(design_llm=tiered_llm)
 
     try:
