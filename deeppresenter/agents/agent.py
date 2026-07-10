@@ -34,6 +34,7 @@ from deeppresenter.utils.log import (
     debug, info, timer,
     show_agent_start, show_agent_turn, show_tool_call, show_tool_result, show_agent_done,
 )
+from deeppresenter.utils.toolset import resolve_toolset
 from deeppresenter.utils.typings import (
     ChatMessage,
     Cost,
@@ -123,25 +124,11 @@ class Agent:
         show_agent_start(self.name, self.max_turns)
 
     def _setup_toolset(self):
-        toolset = self.role_config.toolset
-
-        if toolset.include_tool_servers == "all":
-            servers = list(self.agent_env._server_tools.keys())
-        else:
-            servers = toolset.include_tool_servers
-
-        self.tools: list[dict] = []
-        for server in servers:
-            if server in toolset.exclude_tool_servers:
-                continue
-            for tool_name in self.agent_env._server_tools.get(server, []):
-                if tool_name not in toolset.exclude_tools:
-                    self.tools.append(self.agent_env._tools_dict[tool_name])
-
-        for tool_name in toolset.include_tools:
-            spec = self.agent_env._tools_dict.get(tool_name)
-            if spec and spec not in self.tools:
-                self.tools.append(spec)
+        self.tools: list[dict] = resolve_toolset(
+            self.role_config.toolset,
+            self.agent_env._tools_dict,
+            self.agent_env._server_tools,
+        )
 
     async def chat(
         self,

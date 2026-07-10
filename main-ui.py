@@ -1,15 +1,18 @@
+import json
 import logging
 import os
 import time
 import uuid
 from pathlib import Path
+from typing import Literal
 
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 
 from agents.llms import AsyncLLM
+from deeppresenter.utils.config import LLM
 
 # .env 파일을 os.environ 에 주입. reload worker 재import 시에도 동일하게 적용된다.
 load_dotenv()
@@ -36,9 +39,17 @@ async def add_process_time_header(request: Request, call_next):
 # ---------------------------------------------------------------------------
 # LLM — 환경변수에서 읽음 (.env 또는 시스템 환경변수)
 # ---------------------------------------------------------------------------
+
+# OPENAI_BASE_URL 미설정 시 폴백하는 기본 엔드포인트. API 요청의 base_url 파라미터로도 덮어쓸 수 있다.
+_DEFAULT_BASE_URL = "http://workplace-litellm.aipp02.skhynix.com/v1"
+
+# Research/Design 단계에 별도 instruction을 받지 않는 엔드포인트에서 사용하는 고정 지시문.
+_RESEARCH_DEFAULT_INSTRUCTION = "Create presentation content based on the attached document."
+_DESIGN_DEFAULT_INSTRUCTION = "Create a professional presentation."
+
 _llm = AsyncLLM(
-    model=os.environ.get("MODEL_NAME", "claude-opus-4-5"),
-    base_url=os.environ.get("OPENAI_BASE_URL") or None,
+    model=os.environ.get("MODEL_BIG", "claude-opus-4-5"),
+    base_url=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL,
     api_key=os.environ.get("OPENAI_API_KEY", ""),
     timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
 )
@@ -46,8 +57,8 @@ _llm = AsyncLLM(
 # Design 에이전트 전용 모델 (VLM) — DESIGN_MODEL_NAME이 없으면 기본 모델 사용.
 # API 키는 VLM_API_KEY가 있으면 사용하고, 없으면 OPENAI_API_KEY로 폴백한다.
 _design_llm = AsyncLLM(
-    model=os.environ.get("DESIGN_MODEL_NAME") or os.environ.get("MODEL_NAME", "claude-opus-4-5"),
-    base_url=os.environ.get("OPENAI_BASE_URL") or None,
+    model=os.environ.get("DESIGN_MODEL_NAME") or os.environ.get("MODEL_BIG", "claude-opus-4-5"),
+    base_url=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL,
     api_key=os.environ.get("VLM_API_KEY") or os.environ.get("OPENAI_API_KEY", ""),
     timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
 )
@@ -59,41 +70,139 @@ logger.info("LLM configured: research=%s  design=%s  language=%s",
             _llm, _design_llm, _LANGUAGE)
 
 
-def _make_deep_config():
-    """DeepPresenterConfig을 현재 _llm 설정으로 생성."""
+def _make_deep_config(research_llm=None, design_llm=None):
+    """DeepPresenterConfig을 생성. research_llm/design_llm을 넘기면 해당 티어로
+    선택된 LLM을 쓰고, 안 넘기면 기존처럼 정적 글로벌(_llm/_design_llm)에서 만든다."""
     from deeppresenter.utils.config import DeepPresenterConfig, LLM
 
     def _to_deep_llm(llm: AsyncLLM) -> LLM:
         return LLM(model=llm.model, base_url=llm.base_url, api_key=llm.api_key)
 
+    r = research_llm or _to_deep_llm(_llm)
+    d = design_llm or _to_deep_llm(_design_llm)
     return DeepPresenterConfig(
-        research_agent=_to_deep_llm(_llm),
-        design_agent=_to_deep_llm(_design_llm),
-        long_context_model=_to_deep_llm(_llm),
+        research_agent=r,
+        design_agent=d,
+        long_context_model=r,
     )
 
 
 # ---------------------------------------------------------------------------
-# Endpoints
+# 모델 티어 (big/middle/small) — API 요청의 model_size 파라미터로 선택.
+# .env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL을 서버 시작 시점에 한 번만 읽어서
+# LLM 인스턴스로 만들어둔다 (요청마다 다시 만들지 않음).
+# ---------------------------------------------------------------------------
+_MODEL_TIER_ENV = {"big": "MODEL_BIG", "middle": "MODEL_MIDDLE", "small": "MODEL_SMALL"}
+
+
+def _build_tier_llm(model_size: str) -> LLM | None:
+    model_name = os.environ.get(_MODEL_TIER_ENV[model_size])
+    if not model_name and model_size == "big":
+        # MODEL_BIG 미설정 시 DESIGN_MODEL_NAME → 기본값으로 폴백
+        model_name = os.environ.get("DESIGN_MODEL_NAME") or "claude-opus-4-5"
+    if not model_name:
+        return None
+
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    if model_size == "big":
+        api_key = os.environ.get("OPENAI_API_KEY_BIG") or api_key
+
+    return LLM(model=model_name, base_url=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, api_key=api_key)
+
+
+_TIER_LLMS: dict[str, LLM | None] = {size: _build_tier_llm(size) for size in _MODEL_TIER_ENV}
+
+logger.info(
+    "Model tiers configured: big=%s middle=%s small=%s",
+    _TIER_LLMS["big"].model if _TIER_LLMS["big"] else None,
+    _TIER_LLMS["middle"].model if _TIER_LLMS["middle"] else None,
+    _TIER_LLMS["small"].model if _TIER_LLMS["small"] else None,
+)
+
+
+def _parse_additional_request(raw: str | None) -> dict:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid additional_request JSON: {e}")
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=400, detail="additional_request must be a JSON object")
+    return parsed
+
+
+def _resolve_tiered_llm(model_size: str, additional_request: str | None, base_url: str | None = None) -> LLM:
+    """시작 시점에 만들어둔 티어별 LLM(_TIER_LLMS)에 additional_request/base_url을 병합해 반환."""
+    base = _TIER_LLMS[model_size]
+    if base is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{_MODEL_TIER_ENV[model_size]} is not configured in .env",
+        )
+    params = _parse_additional_request(additional_request)
+    updates = {}
+    if params:
+        updates["sampling_parameters"] = {**base.sampling_parameters, **params}
+    if base_url:
+        updates["base_url"] = base_url
+    if not updates:
+        return base
+    return base.model_copy(update=updates)
+
+
+async def _design_response(result, session_id: str, export_filename: str):
+    """Shared response-building for the Design endpoints.
+
+    Converts the generated slides to PPTX in the same request (same replica)
+    instead of requiring a separate /export call — with multiple replicas
+    behind a load balancer and no shared storage, that follow-up call can
+    land on a different replica than the one that generated slides_dir and
+    fail with "slides_dir not found" even though the files genuinely exist,
+    just on another replica's local disk.
+    """
+    from deeppresenter.tools.export import html_slides_to_pptx
+
+    slides_dir = result.slides_dir
+    html_files = sorted(Path(slides_dir).glob("slide_*.html"))
+
+    pptx_path = Path(slides_dir) / export_filename
+    try:
+        await html_slides_to_pptx(
+            slides_dir=slides_dir,
+            output_path=str(pptx_path),
+            aspect_ratio="16:9",
+            soft=True,
+        )
+    except Exception as e:
+        logger.error("[Design] export failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Export failed: {e}")
+
+    return FileResponse(
+        path=str(pptx_path),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=export_filename,
+        headers={
+            "X-Session-Id": session_id,
+            "X-Slides-Dir": slides_dir,
+            "X-Slide-Count": str(len(html_files)),
+            "X-Turns": str(len(result.messages_log)),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stage runners — Research/Design 각 단계의 실제 실행 로직. 단독 엔드포인트(/research,
+# /design-hynix-template, /design-free-template)와 Research+Design을 이어 붙인 결합
+# 엔드포인트(/template-based-ppt-generation, /template-free-ppt-generation)가 공유한다.
 # ---------------------------------------------------------------------------
 
-@app.get("/health")
-async def health():
-    return {"status": "ok", "model": _llm.model}
-
-
-@app.post("/research")
-async def research(
-    file: UploadFile = File(...),
-    instruction: str = Form(...),
-    num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto=false일 때만 사용)"),
-    auto: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
-):
-    """.md 파일 + instruction → Research 에이전트로 슬라이드 원고 생성."""
-    from deeppresenter.agents.env import AgentEnv
+async def _run_research_stage(config, workspace, session_id: str, file: UploadFile,
+                               num_pages: int, auto_page: bool):
+    """업로드된 .md → 슬라이드 원고(ResearchGraphResult) 생성."""
     from deeppresenter.agents.page_planner import decide_num_pages
-    from deeppresenter.agents.research import Research
-    from deeppresenter.utils.constants import WORKSPACE_BASE
+    from deeppresenter.graph.callbacks import get_langfuse_handler
+    from deeppresenter.graph.research_graph import run_research_graph
     from deeppresenter.utils.typings import InputRequest
 
     if not file.filename or not file.filename.lower().endswith(".md"):
@@ -105,67 +214,155 @@ async def research(
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
 
-    config = _make_deep_config()
-
-    if auto:
-        resolved_num_pages = await decide_num_pages(config.long_context_model, md_content, instruction)
+    if auto_page:
+        resolved_num_pages = await decide_num_pages(config.long_context_model, md_content, _RESEARCH_DEFAULT_INSTRUCTION)
     else:
         resolved_num_pages = num_pages
 
-    # 세션별 workspace 생성
-    session_id = str(uuid.uuid4())[:8]
-    workspace = WORKSPACE_BASE / session_id
-    workspace.mkdir(parents=True, exist_ok=True)
-
-    # 업로드 파일 저장
     attachment_path = workspace / file.filename
     attachment_path.write_bytes(raw)
 
     req = InputRequest(
-        instruction=instruction,
+        instruction=_RESEARCH_DEFAULT_INSTRUCTION,
         attachments=[str(attachment_path)],
         num_pages=str(resolved_num_pages),
         language=_LANGUAGE,
     )
 
     logger.info(
-        "[Research] session=%s lang=%s auto=%s num_pages_input=%d resolved_num_pages=%d instruction=%r",
-        session_id, _LANGUAGE, auto, num_pages, resolved_num_pages, instruction[:80],
+        "[Research] session=%s lang=%s auto_page=%s num_pages_input=%d resolved_num_pages=%d",
+        session_id, _LANGUAGE, auto_page, num_pages, resolved_num_pages,
     )
 
-    manuscript_path = None
-    messages_log = []
-
     try:
-        async with AgentEnv(workspace) as env:
-            agent = Research(config=config, agent_env=env, workspace=workspace, language=_LANGUAGE)
-            async for item in agent.loop(req):
-                if isinstance(item, str):
-                    manuscript_path = item
-                    break
-                else:
-                    messages_log.append({"role": item.role, "text": item.text[:200]})
-            agent.save_history()
+        result = await run_research_graph(
+            config=config,
+            workspace=workspace,
+            req=req,
+            language=_LANGUAGE,
+            langfuse_handler=get_langfuse_handler(session_id),
+            session_id=session_id,
+        )
     except Exception as e:
         logger.error("[Research] failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Research agent failed: {e}")
 
-    if manuscript_path is None:
-        raise HTTPException(status_code=500, detail="Research agent did not produce a manuscript.")
+    return result, resolved_num_pages
+
+
+async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_file: str, instruction: str):
+    """원고(.md) → Design 에이전트(Hynix 템플릿)로 HTML 슬라이드 생성."""
+    from deeppresenter.graph.callbacks import get_langfuse_handler
+    from deeppresenter.graph.design_graph import run_design_graph
+    from deeppresenter.utils.typings import InputRequest
+
+    req = InputRequest(instruction=instruction, language=_LANGUAGE)
+
+    template_content = ""
+    tmpl_path = os.environ.get("DESIGN_TEMPLATE_FILE")
+    if tmpl_path and Path(tmpl_path).exists():
+        template_content = Path(tmpl_path).read_text(encoding="utf-8")
+
+    config_file = os.environ.get("DESIGN_CONFIG_FILE") or None
+
+    logger.info("[DesignHynixTemplate] session=%s lang=%s file=%s config=%s template=%s",
+                session_id, _LANGUAGE, Path(markdown_file).name,
+                Path(config_file).name if config_file else "Design.yaml",
+                bool(template_content))
+
+    try:
+        return await run_design_graph(
+            config=config,
+            workspace=workspace,
+            req=req,
+            markdown_file=markdown_file,
+            template_content=template_content,
+            config_file=config_file,
+            language=_LANGUAGE,
+            langfuse_handler=get_langfuse_handler(session_id),
+            session_id=session_id,
+        )
+    except Exception as e:
+        logger.error("[DesignHynixTemplate] failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Design agent failed: {e}")
+
+
+async def _run_design_free_stage(config, workspace, session_id: str, markdown_file: str, instruction: str):
+    """원고(.md) → Design 에이전트(자유 템플릿)로 HTML 슬라이드 생성."""
+    from deeppresenter.graph.callbacks import get_langfuse_handler
+    from deeppresenter.graph.design_graph import run_design_graph
+    from deeppresenter.utils.constants import PACKAGE_DIR
+    from deeppresenter.utils.typings import InputRequest
+
+    req = InputRequest(instruction=instruction, language=_LANGUAGE)
+
+    config_file = PACKAGE_DIR / "roles" / "DesignFreeTemplate.yaml"
+
+    logger.info("[DesignFreeTemplate] session=%s lang=%s file=%s config=%s",
+                session_id, _LANGUAGE, Path(markdown_file).name, config_file.name)
+
+    try:
+        return await run_design_graph(
+            config=config,
+            workspace=workspace,
+            req=req,
+            markdown_file=markdown_file,
+            config_file=config_file,
+            language=_LANGUAGE,
+            langfuse_handler=get_langfuse_handler(session_id),
+            session_id=session_id,
+        )
+    except Exception as e:
+        logger.error("[DesignFreeTemplate] failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Design agent failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "model": _llm.model}
+
+
+@app.post("/research", tags=["dev"])
+async def research(
+    file: UploadFile = File(...),
+    num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
+    auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
+    model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
+    base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
+    additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
+):
+    """.md 파일 → Research 에이전트(LangGraph 엔진)로 슬라이드 원고 생성."""
+    from deeppresenter.utils.constants import WORKSPACE_BASE
+
+    tiered_llm = _resolve_tiered_llm(model_size, additional_request, base_url)
+    config = _make_deep_config(research_llm=tiered_llm)
+
+    # 세션별 workspace 생성
+    session_id = str(uuid.uuid4())[:8]
+    workspace = WORKSPACE_BASE / session_id
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    result, resolved_num_pages = await _run_research_stage(
+        config, workspace, session_id, file, num_pages, auto_page,
+    )
 
     return FileResponse(
-        path=manuscript_path,
+        path=result.manuscript_path,
         media_type="text/markdown",
-        filename=Path(manuscript_path).name,
+        filename=Path(result.manuscript_path).name,
         headers={
             "X-Session-Id": session_id,
-            "X-Turns": str(len(messages_log)),
+            "X-Turns": str(len(result.messages_log)),
             "X-Num-Pages": str(resolved_num_pages),
         },
     )
 
 
-@app.post("/export")
+@app.post("/export", tags=["dev"])
 async def export_pptx(
     slides_dir: str = Form(...),
     filename: str = Form(default="slides.pptx"),
@@ -206,23 +403,24 @@ async def export_pptx(
     )
 
 
-@app.post("/design-hynix-template")
+@app.post("/design-hynix-template", tags=["dev"])
 async def design_hynix_template(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
+    export_filename: str = Form(default="slides.pptx"),
+    model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
+    base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
+    additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
 ):
-    """슬라이드 원고 .md → Design 에이전트 → HTML 슬라이드 생성."""
-    from deeppresenter.agents.design import Design
-    from deeppresenter.agents.env import AgentEnv
+    """슬라이드 원고 .md → Design 에이전트(LangGraph 엔진) → HTML 슬라이드 생성 → PPTX 반환."""
     from deeppresenter.utils.constants import WORKSPACE_BASE
-    from deeppresenter.utils.typings import InputRequest
 
     if not file.filename or not file.filename.lower().endswith(".md"):
         raise HTTPException(status_code=400, detail="Only .md files are accepted.")
 
     raw = await file.read()
     try:
-        md_content = raw.decode("utf-8")
+        raw.decode("utf-8")
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
 
@@ -233,72 +431,35 @@ async def design_hynix_template(
     manuscript_path = workspace / file.filename
     manuscript_path.write_bytes(raw)
 
-    req = InputRequest(instruction=instruction, language=_LANGUAGE)
+    tiered_llm = _resolve_tiered_llm(model_size, additional_request, base_url)
+    config = _make_deep_config(design_llm=tiered_llm)
 
-    template_content = ""
-    tmpl_path = os.environ.get("DESIGN_TEMPLATE_FILE")
-    if tmpl_path and Path(tmpl_path).exists():
-        template_content = Path(tmpl_path).read_text(encoding="utf-8")
+    result = await _run_design_hynix_stage(config, workspace, session_id, str(manuscript_path), instruction)
 
-    config_file = os.environ.get("DESIGN_CONFIG_FILE") or None
-
-    logger.info("[DesignHynixTemplate] session=%s lang=%s file=%s config=%s template=%s",
-                session_id, _LANGUAGE, file.filename,
-                Path(config_file).name if config_file else "Design.yaml",
-                bool(template_content))
-
-    config = _make_deep_config()
-    slides_dir = None
-    messages_log = []
-
-    try:
-        async with AgentEnv(workspace) as env:
-            agent = Design(config=config, agent_env=env, workspace=workspace, language=_LANGUAGE,
-                           config_file=config_file)
-            async for item in agent.loop(req, markdown_file=str(manuscript_path), template_content=template_content):
-                if isinstance(item, str):
-                    slides_dir = item
-                    break
-                else:
-                    messages_log.append({"role": item.role, "text": item.text[:200]})
-            agent.save_history()
-    except Exception as e:
-        logger.error("[DesignHynixTemplate] failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"Design agent failed: {e}")
-
-    if slides_dir is None:
-        raise HTTPException(status_code=500, detail="Design agent did not produce a slides directory.")
-
-    html_files = sorted(Path(slides_dir).glob("slide_*.html"))
-    return JSONResponse(content={
-        "session_id": session_id,
-        "slides_dir": slides_dir,
-        "slide_count": len(html_files),
-        "slides": [str(f) for f in html_files],
-        "turns": len(messages_log),
-    })
+    return await _design_response(result, session_id, export_filename)
 
 
-@app.post("/design-free-template")
+@app.post("/design-free-template", tags=["dev"])
 async def design_free_template(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
+    export_filename: str = Form(default="slides.pptx"),
+    model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
+    base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
+    additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
 ):
-    """슬라이드 원고 .md → Design 에이전트 → HTML 슬라이드 생성.
+    """슬라이드 원고 .md → Design 에이전트(LangGraph 엔진) → HTML 슬라이드 생성 → PPTX 반환.
     템플릿 디렉토리 없이 Design 에이전트가 자유롭게 레이아웃을 설계한다.
     DESIGN_CONFIG_FILE env를 무시하고 항상 DesignFreeTemplate.yaml을 사용한다.
     """
-    from deeppresenter.agents.design import Design
-    from deeppresenter.agents.env import AgentEnv
-    from deeppresenter.utils.constants import PACKAGE_DIR, WORKSPACE_BASE
-    from deeppresenter.utils.typings import InputRequest
+    from deeppresenter.utils.constants import WORKSPACE_BASE
 
     if not file.filename or not file.filename.lower().endswith(".md"):
         raise HTTPException(status_code=400, detail="Only .md files are accepted.")
 
     raw = await file.read()
     try:
-        md_content = raw.decode("utf-8")
+        raw.decode("utf-8")
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
 
@@ -309,43 +470,74 @@ async def design_free_template(
     manuscript_path = workspace / file.filename
     manuscript_path.write_bytes(raw)
 
-    req = InputRequest(instruction=instruction, language=_LANGUAGE)
+    tiered_llm = _resolve_tiered_llm(model_size, additional_request, base_url)
+    config = _make_deep_config(design_llm=tiered_llm)
 
-    config_file = PACKAGE_DIR / "roles" / "DesignFreeTemplate.yaml"
+    result = await _run_design_free_stage(config, workspace, session_id, str(manuscript_path), instruction)
 
-    logger.info("[DesignFreeTemplate] session=%s lang=%s file=%s config=%s",
-                session_id, _LANGUAGE, file.filename, config_file.name)
+    return await _design_response(result, session_id, export_filename)
 
-    config = _make_deep_config()
-    slides_dir = None
-    messages_log = []
 
-    try:
-        async with AgentEnv(workspace) as env:
-            agent = Design(config=config, agent_env=env, workspace=workspace, language=_LANGUAGE,
-                           config_file=config_file)
-            async for item in agent.loop(req, markdown_file=str(manuscript_path)):
-                if isinstance(item, str):
-                    slides_dir = item
-                    break
-                else:
-                    messages_log.append({"role": item.role, "text": item.text[:200]})
-            agent.save_history()
-    except Exception as e:
-        logger.error("[DesignFreeTemplate] failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"Design agent failed: {e}")
+@app.post("/template-based-ppt-generation", tags=["main"], summary="Template-Based-PPT-Generation")
+async def template_based_ppt_generation(
+    file: UploadFile = File(...),
+    num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
+    auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
+    export_filename: str = Form(default="slides.pptx"),
+    research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
+    design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
+    base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
+    additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
+):
+    """.md 파일 → Research 에이전트로 원고 생성 → Design(Hynix 템플릿) 에이전트로 슬라이드 생성,
+    변환까지 한 요청에서 이어서 처리하고 PPTX를 반환한다."""
+    from deeppresenter.utils.constants import WORKSPACE_BASE
 
-    if slides_dir is None:
-        raise HTTPException(status_code=500, detail="Design agent did not produce a slides directory.")
+    research_llm = _resolve_tiered_llm(research_model_size, additional_request, base_url)
+    design_llm = _resolve_tiered_llm(design_model_size, additional_request, base_url)
+    config = _make_deep_config(research_llm=research_llm, design_llm=design_llm)
 
-    html_files = sorted(Path(slides_dir).glob("slide_*.html"))
-    return JSONResponse(content={
-        "session_id": session_id,
-        "slides_dir": slides_dir,
-        "slide_count": len(html_files),
-        "slides": [str(f) for f in html_files],
-        "turns": len(messages_log),
-    })
+    session_id = str(uuid.uuid4())[:8]
+    workspace = WORKSPACE_BASE / session_id
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    research_result, _ = await _run_research_stage(config, workspace, session_id, file, num_pages, auto_page)
+    design_result = await _run_design_hynix_stage(
+        config, workspace, session_id, research_result.manuscript_path, _DESIGN_DEFAULT_INSTRUCTION,
+    )
+
+    return await _design_response(design_result, session_id, export_filename)
+
+
+@app.post("/template-free-ppt-generation", tags=["main"], summary="Template-Free-PPT-Generation")
+async def template_free_ppt_generation(
+    file: UploadFile = File(...),
+    num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
+    auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
+    export_filename: str = Form(default="slides.pptx"),
+    research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
+    design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
+    base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
+    additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
+):
+    """.md 파일 → Research 에이전트로 원고 생성 → Design(자유 템플릿) 에이전트로 슬라이드 생성,
+    변환까지 한 요청에서 이어서 처리하고 PPTX를 반환한다."""
+    from deeppresenter.utils.constants import WORKSPACE_BASE
+
+    research_llm = _resolve_tiered_llm(research_model_size, additional_request, base_url)
+    design_llm = _resolve_tiered_llm(design_model_size, additional_request, base_url)
+    config = _make_deep_config(research_llm=research_llm, design_llm=design_llm)
+
+    session_id = str(uuid.uuid4())[:8]
+    workspace = WORKSPACE_BASE / session_id
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    research_result, _ = await _run_research_stage(config, workspace, session_id, file, num_pages, auto_page)
+    design_result = await _run_design_free_stage(
+        config, workspace, session_id, research_result.manuscript_path, _DESIGN_DEFAULT_INSTRUCTION,
+    )
+
+    return await _design_response(design_result, session_id, export_filename)
 
 
 # ---------------------------------------------------------------------------
@@ -378,9 +570,9 @@ if __name__ == "__main__":
     log_level = os.environ.get("LOG_LEVEL", "info")
 
     logger.info("LLM  : model=%s  vlm=%s  url=%s",
-                os.environ.get("MODEL_NAME", "claude-opus-4-5"),
+                os.environ.get("MODEL_BIG", "claude-opus-4-5"),
                 os.environ.get("DESIGN_MODEL_NAME", "(none)"),
-                os.environ.get("OPENAI_BASE_URL", "(none)"))
+                os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL)
     logger.info("Server: host=%s port=%d reload=%s log_level=%s", host, port, reload, log_level)
 
     uvicorn.run(
