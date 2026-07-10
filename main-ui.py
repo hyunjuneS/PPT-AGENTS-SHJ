@@ -12,6 +12,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
 from agents.llms import AsyncLLM
+from deeppresenter.utils.config import LLM
 
 # .env 파일을 os.environ 에 주입. reload worker 재import 시에도 동일하게 적용된다.
 load_dotenv()
@@ -79,28 +80,36 @@ def _make_deep_config(research_llm=None, design_llm=None):
 
 
 # ---------------------------------------------------------------------------
-# 모델 티어 (big/middle/small) — API 요청의 model_size 파라미터로 선택
+# 모델 티어 (big/middle/small) — API 요청의 model_size 파라미터로 선택.
+# .env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL을 서버 시작 시점에 한 번만 읽어서
+# LLM 인스턴스로 만들어둔다 (요청마다 다시 만들지 않음).
 # ---------------------------------------------------------------------------
 _MODEL_TIER_ENV = {"big": "MODEL_BIG", "middle": "MODEL_MIDDLE", "small": "MODEL_SMALL"}
 
 
-def _resolve_model_name(model_size: str) -> str:
+def _build_tier_llm(model_size: str) -> LLM | None:
     model_name = os.environ.get(_MODEL_TIER_ENV[model_size])
-    if model_name:
-        return model_name
-    if model_size == "big":
+    if not model_name and model_size == "big":
         # MODEL_BIG 미설정 시 기존 동작(DESIGN_MODEL_NAME → MODEL_NAME)으로 폴백
-        return os.environ.get("DESIGN_MODEL_NAME") or os.environ.get("MODEL_NAME", "claude-opus-4-5")
-    raise HTTPException(
-        status_code=400,
-        detail=f"{_MODEL_TIER_ENV[model_size]} is not configured in .env",
-    )
+        model_name = os.environ.get("DESIGN_MODEL_NAME") or os.environ.get("MODEL_NAME", "claude-opus-4-5")
+    if not model_name:
+        return None
 
-
-def _resolve_api_key(model_size: str) -> str:
+    api_key = os.environ.get("OPENAI_API_KEY", "")
     if model_size == "big":
-        return os.environ.get("OPENAI_API_KEY_BIG") or os.environ.get("OPENAI_API_KEY", "")
-    return os.environ.get("OPENAI_API_KEY", "")
+        api_key = os.environ.get("OPENAI_API_KEY_BIG") or api_key
+
+    return LLM(model=model_name, base_url=os.environ.get("OPENAI_BASE_URL") or None, api_key=api_key)
+
+
+_TIER_LLMS: dict[str, LLM | None] = {size: _build_tier_llm(size) for size in _MODEL_TIER_ENV}
+
+logger.info(
+    "Model tiers configured: big=%s middle=%s small=%s",
+    _TIER_LLMS["big"].model if _TIER_LLMS["big"] else None,
+    _TIER_LLMS["middle"].model if _TIER_LLMS["middle"] else None,
+    _TIER_LLMS["small"].model if _TIER_LLMS["small"] else None,
+)
 
 
 def _parse_provider_request_body(raw: str | None) -> dict:
@@ -115,20 +124,21 @@ def _parse_provider_request_body(raw: str | None) -> dict:
     return parsed
 
 
-def _resolve_tiered_llm(model_size: str, provider_request_body: str | None):
-    """model_size(big/middle/small)와 provider_request_body(JSON 문자열)로부터
-    deeppresenter.utils.config.LLM 인스턴스를 만든다."""
-    from deeppresenter.utils.config import LLM
+def _resolve_tiered_llm(model_size: str, provider_request_body: str | None) -> LLM:
+    """시작 시점에 만들어둔 티어별 LLM(_TIER_LLMS)에 provider_request_body를 병합해 반환."""
+    base = _TIER_LLMS[model_size]
+    if base is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{_MODEL_TIER_ENV[model_size]} is not configured in .env",
+        )
+    params = _parse_provider_request_body(provider_request_body)
+    if not params:
+        return base
+    return base.model_copy(update={"sampling_parameters": {**base.sampling_parameters, **params}})
 
-    return LLM(
-        model=_resolve_model_name(model_size),
-        base_url=os.environ.get("OPENAI_BASE_URL") or None,
-        api_key=_resolve_api_key(model_size),
-        sampling_parameters=_parse_provider_request_body(provider_request_body),
-    )
 
-
-async def _design_response(result, session_id: str, export: bool, export_filename: str, soft: bool):
+async def _design_response(result, session_id: str, export: bool, export_filename: str):
     """Shared response-building for the two Design endpoints.
 
     When export=True, converts the generated slides to PPTX in the same
@@ -161,7 +171,7 @@ async def _design_response(result, session_id: str, export: bool, export_filenam
             slides_dir=slides_dir,
             output_path=str(pptx_path),
             aspect_ratio="16:9",
-            soft=soft,
+            soft=True,
         )
     except Exception as e:
         logger.error("[Design] export failed: %s", e)
@@ -316,9 +326,8 @@ async def export_pptx(
 async def design_hynix_template(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
-    export: bool = Form(default=False, description="true면 슬라이드 생성 직후 같은 요청 안에서 PPTX로 변환해 바로 반환 (레플리카가 여러 대일 때 별도 /export 호출이 다른 레플리카로 라우팅되는 문제 회피)"),
+    export: bool = Form(default=True, description="true(기본)면 슬라이드 생성 직후 같은 요청 안에서 PPTX로 변환해 바로 반환 (레플리카가 여러 대일 때 별도 /export 호출이 다른 레플리카로 라우팅되는 문제 회피)"),
     export_filename: str = Form(default="slides.pptx"),
-    soft: bool = Form(default=True, description="export=true일 때만 사용. 검증 경고를 로그로만 남기고 변환 계속할지 여부"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     provider_request_body: str | None = Form(default=None, description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
 ):
@@ -377,16 +386,15 @@ async def design_hynix_template(
         logger.error("[DesignHynixTemplate] failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Design agent failed: {e}")
 
-    return await _design_response(result, session_id, export, export_filename, soft)
+    return await _design_response(result, session_id, export, export_filename)
 
 
 @app.post("/design-free-template")
 async def design_free_template(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
-    export: bool = Form(default=False, description="true면 슬라이드 생성 직후 같은 요청 안에서 PPTX로 변환해 바로 반환 (레플리카가 여러 대일 때 별도 /export 호출이 다른 레플리카로 라우팅되는 문제 회피)"),
+    export: bool = Form(default=True, description="true(기본)면 슬라이드 생성 직후 같은 요청 안에서 PPTX로 변환해 바로 반환 (레플리카가 여러 대일 때 별도 /export 호출이 다른 레플리카로 라우팅되는 문제 회피)"),
     export_filename: str = Form(default="slides.pptx"),
-    soft: bool = Form(default=True, description="export=true일 때만 사용. 검증 경고를 로그로만 남기고 변환 계속할지 여부"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     provider_request_body: str | None = Form(default=None, description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
 ):
@@ -440,7 +448,7 @@ async def design_free_template(
         logger.error("[DesignFreeTemplate] failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Design agent failed: {e}")
 
-    return await _design_response(result, session_id, export, export_filename, soft)
+    return await _design_response(result, session_id, export, export_filename)
 
 
 # ---------------------------------------------------------------------------
