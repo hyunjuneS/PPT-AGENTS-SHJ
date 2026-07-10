@@ -330,6 +330,7 @@ async def design_hynix_template(
     export_filename: str = Form(default="slides.pptx"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     additional_request: str | None = Form(default=None, description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
+    parallel: bool = Form(default=False, description="실험적(파일럿): 원고를 '---' 기준 섹션으로 나눠 슬라이드를 병렬 생성. 원고에 '---' 구분자가 없으면 400 에러."),
 ):
     """슬라이드 원고 .md → Design 에이전트(LangGraph 엔진) → HTML 슬라이드 생성."""
     from deeppresenter.graph.callbacks import get_langfuse_handler
@@ -371,17 +372,34 @@ async def design_hynix_template(
     config = _make_deep_config(design_llm=tiered_llm)
 
     try:
-        result = await run_design_graph(
-            config=config,
-            workspace=workspace,
-            req=req,
-            markdown_file=str(manuscript_path),
-            template_content=template_content,
-            config_file=config_file,
-            language=_LANGUAGE,
-            langfuse_handler=get_langfuse_handler(session_id),
-            session_id=session_id,
-        )
+        if parallel:
+            from deeppresenter.graph.design_parallel import run_design_graph_parallel
+
+            result = await run_design_graph_parallel(
+                config=config,
+                workspace=workspace,
+                req=req,
+                markdown_file=str(manuscript_path),
+                template_content=template_content,
+                language=_LANGUAGE,
+                langfuse_handler=get_langfuse_handler(session_id),
+                session_id=session_id,
+                max_workers=int(os.environ.get("DESIGN_PARALLEL_WORKERS", "4")),
+            )
+        else:
+            result = await run_design_graph(
+                config=config,
+                workspace=workspace,
+                req=req,
+                markdown_file=str(manuscript_path),
+                template_content=template_content,
+                config_file=config_file,
+                language=_LANGUAGE,
+                langfuse_handler=get_langfuse_handler(session_id),
+                session_id=session_id,
+            )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error("[DesignHynixTemplate] failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Design agent failed: {e}")
