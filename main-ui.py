@@ -9,7 +9,7 @@ from typing import Literal
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 
 from agents.llms import AsyncLLM
 from deeppresenter.utils.config import LLM
@@ -42,6 +42,10 @@ async def add_process_time_header(request: Request, call_next):
 
 # OPENAI_BASE_URL 미설정 시 폴백하는 기본 엔드포인트. API 요청의 base_url 파라미터로도 덮어쓸 수 있다.
 _DEFAULT_BASE_URL = "http://workplace-litellm.aipp02.skhynix.com/v1"
+
+# Research/Design 단계에 별도 instruction을 받지 않는 엔드포인트에서 사용하는 고정 지시문.
+_RESEARCH_DEFAULT_INSTRUCTION = "Create presentation content based on the attached document."
+_DESIGN_DEFAULT_INSTRUCTION = "Create a professional presentation."
 
 _llm = AsyncLLM(
     model=os.environ.get("MODEL_BIG", "claude-opus-4-5"),
@@ -147,32 +151,20 @@ def _resolve_tiered_llm(model_size: str, additional_request: str | None, base_ur
     return base.model_copy(update=updates)
 
 
-async def _design_response(result, session_id: str, export: bool, export_filename: str):
-    """Shared response-building for the two Design endpoints.
+async def _design_response(result, session_id: str, export_filename: str):
+    """Shared response-building for the Design endpoints.
 
-    When export=True, converts the generated slides to PPTX in the same
-    request (same replica) instead of requiring a separate /export call —
-    with multiple replicas behind a load balancer and no shared storage,
-    that follow-up call can land on a different replica than the one that
-    generated slides_dir and fail with "slides_dir not found" even though
-    the files genuinely exist, just on another replica's local disk.
-    Returns the PPTX directly; a FileResponse can't also carry a JSON body,
-    so slide metadata goes in headers instead (same pattern /research
-    already uses for its FileResponse).
+    Converts the generated slides to PPTX in the same request (same replica)
+    instead of requiring a separate /export call — with multiple replicas
+    behind a load balancer and no shared storage, that follow-up call can
+    land on a different replica than the one that generated slides_dir and
+    fail with "slides_dir not found" even though the files genuinely exist,
+    just on another replica's local disk.
     """
     from deeppresenter.tools.export import html_slides_to_pptx
 
     slides_dir = result.slides_dir
     html_files = sorted(Path(slides_dir).glob("slide_*.html"))
-
-    if not export:
-        return JSONResponse(content={
-            "session_id": session_id,
-            "slides_dir": slides_dir,
-            "slide_count": len(html_files),
-            "slides": [str(f) for f in html_files],
-            "turns": len(result.messages_log),
-        })
 
     pptx_path = Path(slides_dir) / export_filename
     try:
@@ -205,9 +197,9 @@ async def _design_response(result, session_id: str, export: bool, export_filenam
 # 엔드포인트(/template-based-ppt-generation, /template-free-ppt-generation)가 공유한다.
 # ---------------------------------------------------------------------------
 
-async def _run_research_stage(config, workspace, session_id: str, file: UploadFile, instruction: str,
-                               num_pages: int, auto: bool):
-    """업로드된 .md + instruction → 슬라이드 원고(ResearchGraphResult) 생성."""
+async def _run_research_stage(config, workspace, session_id: str, file: UploadFile,
+                               num_pages: int, auto_page: bool):
+    """업로드된 .md → 슬라이드 원고(ResearchGraphResult) 생성."""
     from deeppresenter.agents.page_planner import decide_num_pages
     from deeppresenter.graph.callbacks import get_langfuse_handler
     from deeppresenter.graph.research_graph import run_research_graph
@@ -222,8 +214,8 @@ async def _run_research_stage(config, workspace, session_id: str, file: UploadFi
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
 
-    if auto:
-        resolved_num_pages = await decide_num_pages(config.long_context_model, md_content, instruction)
+    if auto_page:
+        resolved_num_pages = await decide_num_pages(config.long_context_model, md_content, _RESEARCH_DEFAULT_INSTRUCTION)
     else:
         resolved_num_pages = num_pages
 
@@ -231,15 +223,15 @@ async def _run_research_stage(config, workspace, session_id: str, file: UploadFi
     attachment_path.write_bytes(raw)
 
     req = InputRequest(
-        instruction=instruction,
+        instruction=_RESEARCH_DEFAULT_INSTRUCTION,
         attachments=[str(attachment_path)],
         num_pages=str(resolved_num_pages),
         language=_LANGUAGE,
     )
 
     logger.info(
-        "[Research] session=%s lang=%s auto=%s num_pages_input=%d resolved_num_pages=%d instruction=%r",
-        session_id, _LANGUAGE, auto, num_pages, resolved_num_pages, instruction[:80],
+        "[Research] session=%s lang=%s auto_page=%s num_pages_input=%d resolved_num_pages=%d",
+        session_id, _LANGUAGE, auto_page, num_pages, resolved_num_pages,
     )
 
     try:
@@ -337,14 +329,13 @@ async def health():
 @app.post("/research", tags=["dev"])
 async def research(
     file: UploadFile = File(...),
-    instruction: str = Form(...),
-    num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto=false일 때만 사용)"),
-    auto: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
+    num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
+    auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
 ):
-    """.md 파일 + instruction → Research 에이전트(LangGraph 엔진)로 슬라이드 원고 생성."""
+    """.md 파일 → Research 에이전트(LangGraph 엔진)로 슬라이드 원고 생성."""
     from deeppresenter.utils.constants import WORKSPACE_BASE
 
     tiered_llm = _resolve_tiered_llm(model_size, additional_request, base_url)
@@ -356,7 +347,7 @@ async def research(
     workspace.mkdir(parents=True, exist_ok=True)
 
     result, resolved_num_pages = await _run_research_stage(
-        config, workspace, session_id, file, instruction, num_pages, auto,
+        config, workspace, session_id, file, num_pages, auto_page,
     )
 
     return FileResponse(
@@ -416,13 +407,12 @@ async def export_pptx(
 async def design_hynix_template(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
-    export: bool = Form(default=True, description="true(기본)면 슬라이드 생성 직후 같은 요청 안에서 PPTX로 변환해 바로 반환 (레플리카가 여러 대일 때 별도 /export 호출이 다른 레플리카로 라우팅되는 문제 회피)"),
     export_filename: str = Form(default="slides.pptx"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
 ):
-    """슬라이드 원고 .md → Design 에이전트(LangGraph 엔진) → HTML 슬라이드 생성."""
+    """슬라이드 원고 .md → Design 에이전트(LangGraph 엔진) → HTML 슬라이드 생성 → PPTX 반환."""
     from deeppresenter.utils.constants import WORKSPACE_BASE
 
     if not file.filename or not file.filename.lower().endswith(".md"):
@@ -446,20 +436,19 @@ async def design_hynix_template(
 
     result = await _run_design_hynix_stage(config, workspace, session_id, str(manuscript_path), instruction)
 
-    return await _design_response(result, session_id, export, export_filename)
+    return await _design_response(result, session_id, export_filename)
 
 
 @app.post("/design-free-template", tags=["dev"])
 async def design_free_template(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
-    export: bool = Form(default=True, description="true(기본)면 슬라이드 생성 직후 같은 요청 안에서 PPTX로 변환해 바로 반환 (레플리카가 여러 대일 때 별도 /export 호출이 다른 레플리카로 라우팅되는 문제 회피)"),
     export_filename: str = Form(default="slides.pptx"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
 ):
-    """슬라이드 원고 .md → Design 에이전트(LangGraph 엔진) → HTML 슬라이드 생성.
+    """슬라이드 원고 .md → Design 에이전트(LangGraph 엔진) → HTML 슬라이드 생성 → PPTX 반환.
     템플릿 디렉토리 없이 Design 에이전트가 자유롭게 레이아웃을 설계한다.
     DESIGN_CONFIG_FILE env를 무시하고 항상 DesignFreeTemplate.yaml을 사용한다.
     """
@@ -486,72 +475,69 @@ async def design_free_template(
 
     result = await _run_design_free_stage(config, workspace, session_id, str(manuscript_path), instruction)
 
-    return await _design_response(result, session_id, export, export_filename)
-
-
-_DESIGN_DEFAULT_INSTRUCTION = "Create a professional presentation."
+    return await _design_response(result, session_id, export_filename)
 
 
 @app.post("/template-based-ppt-generation", tags=["main"], summary="Template-Based-PPT-Generation")
 async def template_based_ppt_generation(
     file: UploadFile = File(...),
-    instruction: str = Form(..., description="Research 에이전트에 전달할 콘텐츠 생성 지시문"),
-    num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto=false일 때만 사용)"),
-    auto: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
-    export: bool = Form(default=True, description="true(기본)면 슬라이드 생성 직후 같은 요청 안에서 PPTX로 변환해 바로 반환"),
+    num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
+    auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
     export_filename: str = Form(default="slides.pptx"),
-    model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
+    research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
+    design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
 ):
-    """.md 파일 + instruction → Research 에이전트로 원고 생성 → Design(Hynix 템플릿) 에이전트로
-    슬라이드 생성까지 한 요청에서 이어서 처리. /research + /design-hynix-template을 순차 실행하는 것과 동일."""
+    """.md 파일 → Research 에이전트로 원고 생성 → Design(Hynix 템플릿) 에이전트로 슬라이드 생성,
+    변환까지 한 요청에서 이어서 처리하고 PPTX를 반환한다."""
     from deeppresenter.utils.constants import WORKSPACE_BASE
 
-    tiered_llm = _resolve_tiered_llm(model_size, additional_request, base_url)
-    config = _make_deep_config(research_llm=tiered_llm, design_llm=tiered_llm)
+    research_llm = _resolve_tiered_llm(research_model_size, additional_request, base_url)
+    design_llm = _resolve_tiered_llm(design_model_size, additional_request, base_url)
+    config = _make_deep_config(research_llm=research_llm, design_llm=design_llm)
 
     session_id = str(uuid.uuid4())[:8]
     workspace = WORKSPACE_BASE / session_id
     workspace.mkdir(parents=True, exist_ok=True)
 
-    research_result, _ = await _run_research_stage(config, workspace, session_id, file, instruction, num_pages, auto)
+    research_result, _ = await _run_research_stage(config, workspace, session_id, file, num_pages, auto_page)
     design_result = await _run_design_hynix_stage(
         config, workspace, session_id, research_result.manuscript_path, _DESIGN_DEFAULT_INSTRUCTION,
     )
 
-    return await _design_response(design_result, session_id, export, export_filename)
+    return await _design_response(design_result, session_id, export_filename)
 
 
 @app.post("/template-free-ppt-generation", tags=["main"], summary="Template-Free-PPT-Generation")
 async def template_free_ppt_generation(
     file: UploadFile = File(...),
-    instruction: str = Form(..., description="Research 에이전트에 전달할 콘텐츠 생성 지시문"),
-    num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto=false일 때만 사용)"),
-    auto: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
-    export: bool = Form(default=True, description="true(기본)면 슬라이드 생성 직후 같은 요청 안에서 PPTX로 변환해 바로 반환"),
+    num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
+    auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
     export_filename: str = Form(default="slides.pptx"),
-    model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
+    research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
+    design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
 ):
-    """.md 파일 + instruction → Research 에이전트로 원고 생성 → Design(자유 템플릿) 에이전트로
-    슬라이드 생성까지 한 요청에서 이어서 처리. /research + /design-free-template을 순차 실행하는 것과 동일."""
+    """.md 파일 → Research 에이전트로 원고 생성 → Design(자유 템플릿) 에이전트로 슬라이드 생성,
+    변환까지 한 요청에서 이어서 처리하고 PPTX를 반환한다."""
     from deeppresenter.utils.constants import WORKSPACE_BASE
 
-    tiered_llm = _resolve_tiered_llm(model_size, additional_request, base_url)
-    config = _make_deep_config(research_llm=tiered_llm, design_llm=tiered_llm)
+    research_llm = _resolve_tiered_llm(research_model_size, additional_request, base_url)
+    design_llm = _resolve_tiered_llm(design_model_size, additional_request, base_url)
+    config = _make_deep_config(research_llm=research_llm, design_llm=design_llm)
 
     session_id = str(uuid.uuid4())[:8]
     workspace = WORKSPACE_BASE / session_id
     workspace.mkdir(parents=True, exist_ok=True)
 
-    research_result, _ = await _run_research_stage(config, workspace, session_id, file, instruction, num_pages, auto)
+    research_result, _ = await _run_research_stage(config, workspace, session_id, file, num_pages, auto_page)
     design_result = await _run_design_free_stage(
         config, workspace, session_id, research_result.manuscript_path, _DESIGN_DEFAULT_INSTRUCTION,
     )
 
-    return await _design_response(design_result, session_id, export, export_filename)
+    return await _design_response(design_result, session_id, export_filename)
 
 
 # ---------------------------------------------------------------------------
