@@ -40,7 +40,7 @@ async def add_process_time_header(request: Request, call_next):
 # LLM — 환경변수에서 읽음 (.env 또는 시스템 환경변수)
 # ---------------------------------------------------------------------------
 _llm = AsyncLLM(
-    model=os.environ.get("MODEL_NAME", "claude-opus-4-5"),
+    model=os.environ.get("MODEL_BIG", "claude-opus-4-5"),
     base_url=os.environ.get("OPENAI_BASE_URL") or None,
     api_key=os.environ.get("OPENAI_API_KEY", ""),
     timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
@@ -49,7 +49,7 @@ _llm = AsyncLLM(
 # Design 에이전트 전용 모델 (VLM) — DESIGN_MODEL_NAME이 없으면 기본 모델 사용.
 # API 키는 VLM_API_KEY가 있으면 사용하고, 없으면 OPENAI_API_KEY로 폴백한다.
 _design_llm = AsyncLLM(
-    model=os.environ.get("DESIGN_MODEL_NAME") or os.environ.get("MODEL_NAME", "claude-opus-4-5"),
+    model=os.environ.get("DESIGN_MODEL_NAME") or os.environ.get("MODEL_BIG", "claude-opus-4-5"),
     base_url=os.environ.get("OPENAI_BASE_URL") or None,
     api_key=os.environ.get("VLM_API_KEY") or os.environ.get("OPENAI_API_KEY", ""),
     timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
@@ -90,8 +90,8 @@ _MODEL_TIER_ENV = {"big": "MODEL_BIG", "middle": "MODEL_MIDDLE", "small": "MODEL
 def _build_tier_llm(model_size: str) -> LLM | None:
     model_name = os.environ.get(_MODEL_TIER_ENV[model_size])
     if not model_name and model_size == "big":
-        # MODEL_BIG 미설정 시 기존 동작(DESIGN_MODEL_NAME → MODEL_NAME)으로 폴백
-        model_name = os.environ.get("DESIGN_MODEL_NAME") or os.environ.get("MODEL_NAME", "claude-opus-4-5")
+        # MODEL_BIG 미설정 시 DESIGN_MODEL_NAME → 기본값으로 폴백
+        model_name = os.environ.get("DESIGN_MODEL_NAME") or "claude-opus-4-5"
     if not model_name:
         return None
 
@@ -481,7 +481,7 @@ if __name__ == "__main__":
     log_level = os.environ.get("LOG_LEVEL", "info")
 
     logger.info("LLM  : model=%s  vlm=%s  url=%s",
-                os.environ.get("MODEL_NAME", "claude-opus-4-5"),
+                os.environ.get("MODEL_BIG", "claude-opus-4-5"),
                 os.environ.get("DESIGN_MODEL_NAME", "(none)"),
                 os.environ.get("OPENAI_BASE_URL", "(none)"))
     logger.info("Server: host=%s port=%d reload=%s log_level=%s", host, port, reload, log_level)
