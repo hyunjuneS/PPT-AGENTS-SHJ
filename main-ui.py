@@ -326,6 +326,11 @@ async def health():
     return {"status": "ok", "model": _llm.model}
 
 
+@app.get("/api/admin/appReady")
+def app_ready():
+    return {"status": "ok"}
+
+
 @app.post("/research", tags=["dev"])
 async def research(
     file: UploadFile = File(...),
