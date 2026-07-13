@@ -14,7 +14,7 @@ RUN python -m pip install --upgrade pip \
     && pip install -U websockets
 
 # TODO: 사내 apt 미러 주소로 교체 (폐쇄망이라 공식 저장소 접근 불가)
-RUN printf "deb [사내 apt 미러 URL] stable main\n" > /etc/apt/sources.list.d/internal.list
+RUN printf "deb [사내 apt 미러 URL] stable main\n" | tee /etc/apt/sources.list
 
 # fonts-noto-cjk: 한국어 슬라이드를 Chromium으로 렌더링할 때 한글이 깨지지 않도록 필수.
 RUN apt-get update && apt-get install -y --no-install-recommends \
