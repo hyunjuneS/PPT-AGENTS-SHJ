@@ -1,6 +1,8 @@
 import json
 import logging
 import os
+import secrets
+import string
 import time
 import uuid
 from pathlib import Path
@@ -120,6 +122,12 @@ logger.info(
 )
 
 
+def _random_emp_no() -> str:
+    """/export 요청에 emp_no가 없을 때 사용하는 임시 사번: test_{영숫자 5글자}."""
+    suffix = "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(5))
+    return f"test_{suffix}"
+
+
 def _parse_additional_request(raw: str | None) -> dict:
     if not raw:
         return {}
@@ -151,7 +159,7 @@ def _resolve_tiered_llm(model_size: str, additional_request: str | None, base_ur
     return base.model_copy(update=updates)
 
 
-async def _design_response(result, session_id: str, export_filename: str):
+async def _design_response(result, session_id: str, export_filename: str, emp_no: str):
     """Shared response-building for the Design endpoints.
 
     Converts the generated slides to PPTX in the same request (same replica)
@@ -160,8 +168,11 @@ async def _design_response(result, session_id: str, export_filename: str):
     land on a different replica than the one that generated slides_dir and
     fail with "slides_dir not found" even though the files genuinely exist,
     just on another replica's local disk.
+
+    The PPTX is also uploaded to MinIO at "{emp_no}/slide/{export_filename}.pptx".
     """
     from deeppresenter.tools.export import html_slides_to_pptx
+    from deeppresenter.tools.storage import upload_pptx
 
     slides_dir = result.slides_dir
     html_files = sorted(Path(slides_dir).glob("slide_*.html"))
@@ -178,6 +189,12 @@ async def _design_response(result, session_id: str, export_filename: str):
         logger.error("[Design] export failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Export failed: {e}")
 
+    try:
+        object_name = upload_pptx(str(pptx_path), emp_no, export_filename)
+    except Exception as e:
+        logger.error("[Design] MinIO upload failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"MinIO upload failed: {e}")
+
     return FileResponse(
         path=str(pptx_path),
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -187,6 +204,7 @@ async def _design_response(result, session_id: str, export_filename: str):
             "X-Slides-Dir": slides_dir,
             "X-Slide-Count": str(len(html_files)),
             "X-Turns": str(len(result.messages_log)),
+            "X-Minio-Object": object_name,
         },
     )
 
@@ -372,12 +390,15 @@ async def export_pptx(
     slides_dir: str = Form(...),
     filename: str = Form(default="slides.pptx"),
     soft: bool = Form(default=True),
+    emp_no: str | None = Form(default=None, description="미입력 시 'test_{랜덤5글자}'로 자동 생성"),
 ):
     """HTML 슬라이드 폴더(slides_dir) → PPTX 파일 변환 후 다운로드 (16:9 고정).
     soft=True(기본): 검증 경고는 로그로만 출력하고 PPTX 생성 계속.
     soft=False: 검증 오류 발생 시 변환 중단.
+    생성된 PPTX는 MinIO에도 "{emp_no}/slide/{filename}.pptx" 로 업로드된다.
     """
     from deeppresenter.tools.export import html_slides_to_pptx
+    from deeppresenter.tools.storage import upload_pptx
 
     slides_path = Path(slides_dir)
     if not slides_path.exists() or not slides_path.is_dir():
@@ -387,8 +408,9 @@ async def export_pptx(
     if not html_files:
         raise HTTPException(status_code=400, detail="No slide_*.html files found in slides_dir.")
 
+    resolved_emp_no = emp_no or _random_emp_no()
     pptx_path = slides_path / filename
-    logger.info("[Export] %d slides → %s (soft=%s)", len(html_files), pptx_path, soft)
+    logger.info("[Export] %d slides → %s (soft=%s, emp_no=%s)", len(html_files), pptx_path, soft, resolved_emp_no)
 
     try:
         await html_slides_to_pptx(
@@ -401,10 +423,20 @@ async def export_pptx(
         logger.error("[Export] failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Export failed: {e}")
 
+    try:
+        object_name = upload_pptx(str(pptx_path), resolved_emp_no, filename)
+    except Exception as e:
+        logger.error("[Export] MinIO upload failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"MinIO upload failed: {e}")
+
     return FileResponse(
         path=str(pptx_path),
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         filename=filename,
+        headers={
+            "X-Emp-No": resolved_emp_no,
+            "X-Minio-Object": object_name,
+        },
     )
 
 
@@ -413,6 +445,7 @@ async def design_hynix_template(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
     export_filename: str = Form(default="slides.pptx"),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{export_filename}.pptx'에 사용되는 사번"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
@@ -441,7 +474,7 @@ async def design_hynix_template(
 
     result = await _run_design_hynix_stage(config, workspace, session_id, str(manuscript_path), instruction)
 
-    return await _design_response(result, session_id, export_filename)
+    return await _design_response(result, session_id, export_filename, emp_no)
 
 
 @app.post("/design-free-template", tags=["dev"])
@@ -449,6 +482,7 @@ async def design_free_template(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
     export_filename: str = Form(default="slides.pptx"),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{export_filename}.pptx'에 사용되는 사번"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
@@ -480,7 +514,7 @@ async def design_free_template(
 
     result = await _run_design_free_stage(config, workspace, session_id, str(manuscript_path), instruction)
 
-    return await _design_response(result, session_id, export_filename)
+    return await _design_response(result, session_id, export_filename, emp_no)
 
 
 @app.post("/template-based-ppt-generation", tags=["main"], summary="Template-Based-PPT-Generation")
@@ -489,6 +523,7 @@ async def template_based_ppt_generation(
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
     export_filename: str = Form(default="slides.pptx"),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{export_filename}.pptx'에 사용되는 사번"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
@@ -511,7 +546,7 @@ async def template_based_ppt_generation(
         config, workspace, session_id, research_result.manuscript_path, _DESIGN_DEFAULT_INSTRUCTION,
     )
 
-    return await _design_response(design_result, session_id, export_filename)
+    return await _design_response(design_result, session_id, export_filename, emp_no)
 
 
 @app.post("/template-free-ppt-generation", tags=["main"], summary="Template-Free-PPT-Generation")
@@ -520,6 +555,7 @@ async def template_free_ppt_generation(
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
     export_filename: str = Form(default="slides.pptx"),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{export_filename}.pptx'에 사용되는 사번"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
@@ -542,7 +578,7 @@ async def template_free_ppt_generation(
         config, workspace, session_id, research_result.manuscript_path, _DESIGN_DEFAULT_INSTRUCTION,
     )
 
-    return await _design_response(design_result, session_id, export_filename)
+    return await _design_response(design_result, session_id, export_filename, emp_no)
 
 
 # ---------------------------------------------------------------------------

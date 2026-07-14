@@ -9,6 +9,7 @@ tenacity
 python-dotenv
 json-repair
 Pillow
+minio
 
 # LangGraph + Langfuse engine (Phase 1 pilot, deeppresenter/graph/) — ChatOpenAI, not
 # ChatAnthropic: the app talks to its configured model through an OpenAI-compatible
