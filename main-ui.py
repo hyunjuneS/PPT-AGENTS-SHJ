@@ -440,6 +440,33 @@ async def export_pptx(
     )
 
 
+@app.post("/download", tags=["dev"])
+async def download_pptx(
+    emp_no: str = Form(...),
+    export_filename: str = Form(..., description="MinIO에 저장된 파일명 (예: slides.pptx 또는 slides)"),
+):
+    """MinIO의 '{emp_no}/slide/{export_filename}.pptx' 오브젝트를 조회해 다운로드."""
+    from starlette.background import BackgroundTask
+
+    from deeppresenter.tools.storage import download_pptx as fetch_pptx
+
+    try:
+        local_path, object_name = fetch_pptx(emp_no, export_filename)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("[Download] MinIO download failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"MinIO download failed: {e}")
+
+    return FileResponse(
+        path=local_path,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=Path(object_name).name,
+        headers={"X-Minio-Object": object_name},
+        background=BackgroundTask(lambda: Path(local_path).unlink(missing_ok=True)),
+    )
+
+
 @app.post("/design-hynix-template", tags=["dev"])
 async def design_hynix_template(
     file: UploadFile = File(...),
