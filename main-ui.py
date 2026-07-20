@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import secrets
 import string
 import time
@@ -143,6 +144,26 @@ def _cover_info_block(presenter_name: str, emp_no: str, team_name: str) -> str:
     )
 
 
+_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_\-.]+$")
+
+
+def _write_sources_as_markdown(workspace: Path, ids: list[str], raw_texts: dict[str, str]) -> list[Path]:
+    """DB에서 조회한 id별 raw_text를 'sources/{id}.md' 로 저장하고 경로 목록을 반환."""
+    for source_id in ids:
+        if not _SAFE_ID_RE.match(source_id):
+            raise HTTPException(status_code=400, detail=f"Invalid id (unsafe filename): {source_id}")
+
+    sources_dir = workspace / "sources"
+    sources_dir.mkdir(parents=True, exist_ok=True)
+
+    paths = []
+    for source_id in ids:
+        path = sources_dir / f"{source_id}.md"
+        path.write_text(raw_texts[source_id], encoding="utf-8")
+        paths.append(path)
+    return paths
+
+
 def _parse_additional_request(raw: str | None) -> dict:
     if not raw:
         return {}
@@ -230,41 +251,31 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
 # 엔드포인트(/template-based-ppt-generation, /template-free-ppt-generation)가 공유한다.
 # ---------------------------------------------------------------------------
 
-async def _run_research_stage(config, workspace, session_id: str, file: UploadFile,
-                               num_pages: int, auto_page: bool):
-    """업로드된 .md → 슬라이드 원고(ResearchGraphResult) 생성."""
+async def _run_research_stage_from_paths(config, workspace, session_id: str, md_paths: list[Path],
+                                          num_pages: int, auto_page: bool):
+    """이미 workspace에 저장된 .md 파일 목록 → 슬라이드 원고(ResearchGraphResult) 생성.
+    /research, /template-*-ppt-generation(-db) 이 모두 이 헬퍼를 거쳐간다."""
     from deeppresenter.agents.page_planner import decide_num_pages
     from deeppresenter.graph.callbacks import get_langfuse_handler
     from deeppresenter.graph.research_graph import run_research_graph
     from deeppresenter.utils.typings import InputRequest
 
-    if not file.filename or not file.filename.lower().endswith(".md"):
-        raise HTTPException(status_code=400, detail="Only .md files are accepted.")
-
-    raw = await file.read()
-    try:
-        md_content = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
-
     if auto_page:
-        resolved_num_pages = await decide_num_pages(config.long_context_model, md_content, _RESEARCH_DEFAULT_INSTRUCTION)
+        combined_content = "\n\n".join(p.read_text(encoding="utf-8") for p in md_paths)
+        resolved_num_pages = await decide_num_pages(config.long_context_model, combined_content, _RESEARCH_DEFAULT_INSTRUCTION)
     else:
         resolved_num_pages = num_pages
 
-    attachment_path = workspace / file.filename
-    attachment_path.write_bytes(raw)
-
     req = InputRequest(
         instruction=_RESEARCH_DEFAULT_INSTRUCTION,
-        attachments=[str(attachment_path)],
+        attachments=[str(p) for p in md_paths],
         num_pages=str(resolved_num_pages),
         language=_LANGUAGE,
     )
 
     logger.info(
-        "[Research] session=%s lang=%s auto_page=%s num_pages_input=%d resolved_num_pages=%d",
-        session_id, _LANGUAGE, auto_page, num_pages, resolved_num_pages,
+        "[Research] session=%s lang=%s auto_page=%s num_pages_input=%d resolved_num_pages=%d attachments=%d",
+        session_id, _LANGUAGE, auto_page, num_pages, resolved_num_pages, len(md_paths),
     )
 
     try:
@@ -281,6 +292,24 @@ async def _run_research_stage(config, workspace, session_id: str, file: UploadFi
         raise HTTPException(status_code=500, detail=f"Research agent failed: {e}")
 
     return result, resolved_num_pages
+
+
+async def _run_research_stage(config, workspace, session_id: str, file: UploadFile,
+                               num_pages: int, auto_page: bool):
+    """업로드된 .md → 슬라이드 원고(ResearchGraphResult) 생성."""
+    if not file.filename or not file.filename.lower().endswith(".md"):
+        raise HTTPException(status_code=400, detail="Only .md files are accepted.")
+
+    raw = await file.read()
+    try:
+        raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
+
+    attachment_path = workspace / file.filename
+    attachment_path.write_bytes(raw)
+
+    return await _run_research_stage_from_paths(config, workspace, session_id, [attachment_path], num_pages, auto_page)
 
 
 async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_file: str, instruction: str):
@@ -627,6 +656,106 @@ async def template_free_ppt_generation(
     workspace.mkdir(parents=True, exist_ok=True)
 
     research_result, _ = await _run_research_stage(config, workspace, session_id, file, num_pages, auto_page)
+    design_instruction = f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
+    design_result = await _run_design_free_stage(
+        config, workspace, session_id, research_result.manuscript_path, design_instruction,
+    )
+
+    return await _design_response(design_result, session_id, export_filename, emp_no)
+
+
+@app.post("/template-based-ppt-generation-db", tags=["main"], summary="Template-Based-PPT-Generation-DB")
+async def template_based_ppt_generation_db(
+    ids: list[str] = Form(..., description="sources 테이블에서 raw_text를 조회할 id 목록 (여러 개 전달 가능)"),
+    num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
+    auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
+    export_filename: str = Form(default="slides.pptx"),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
+    team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
+    research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
+    design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
+    base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
+    additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
+):
+    """id 목록 → PostgreSQL sources 테이블에서 raw_text 조회 → '{id}.md' 파일로 저장 →
+    Research 에이전트로 원고 생성 → Design(Hynix 템플릿) 에이전트로 슬라이드 생성,
+    변환까지 한 요청에서 이어서 처리하고 PPTX를 반환한다."""
+    from deeppresenter.tools.db import fetch_raw_texts
+    from deeppresenter.utils.constants import WORKSPACE_BASE
+
+    if not ids:
+        raise HTTPException(status_code=400, detail="ids must contain at least one id.")
+
+    research_llm = _resolve_tiered_llm(research_model_size, additional_request, base_url)
+    design_llm = _resolve_tiered_llm(design_model_size, additional_request, base_url)
+    config = _make_deep_config(research_llm=research_llm, design_llm=design_llm)
+
+    session_id = str(uuid.uuid4())[:8]
+    workspace = WORKSPACE_BASE / session_id
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    try:
+        raw_texts = fetch_raw_texts(ids)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("[TemplateBasedDB] DB fetch failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Database fetch failed: {e}")
+
+    md_paths = _write_sources_as_markdown(workspace, ids, raw_texts)
+
+    research_result, _ = await _run_research_stage_from_paths(config, workspace, session_id, md_paths, num_pages, auto_page)
+    design_instruction = f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
+    design_result = await _run_design_hynix_stage(
+        config, workspace, session_id, research_result.manuscript_path, design_instruction,
+    )
+
+    return await _design_response(design_result, session_id, export_filename, emp_no)
+
+
+@app.post("/template-free-ppt-generation-db", tags=["main"], summary="Template-Free-PPT-Generation-DB")
+async def template_free_ppt_generation_db(
+    ids: list[str] = Form(..., description="sources 테이블에서 raw_text를 조회할 id 목록 (여러 개 전달 가능)"),
+    num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
+    auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
+    export_filename: str = Form(default="slides.pptx"),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
+    team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
+    research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
+    design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
+    base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
+    additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
+):
+    """id 목록 → PostgreSQL sources 테이블에서 raw_text 조회 → '{id}.md' 파일로 저장 →
+    Research 에이전트로 원고 생성 → Design(자유 템플릿) 에이전트로 슬라이드 생성,
+    변환까지 한 요청에서 이어서 처리하고 PPTX를 반환한다."""
+    from deeppresenter.tools.db import fetch_raw_texts
+    from deeppresenter.utils.constants import WORKSPACE_BASE
+
+    if not ids:
+        raise HTTPException(status_code=400, detail="ids must contain at least one id.")
+
+    research_llm = _resolve_tiered_llm(research_model_size, additional_request, base_url)
+    design_llm = _resolve_tiered_llm(design_model_size, additional_request, base_url)
+    config = _make_deep_config(research_llm=research_llm, design_llm=design_llm)
+
+    session_id = str(uuid.uuid4())[:8]
+    workspace = WORKSPACE_BASE / session_id
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    try:
+        raw_texts = fetch_raw_texts(ids)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("[TemplateFreeDB] DB fetch failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Database fetch failed: {e}")
+
+    md_paths = _write_sources_as_markdown(workspace, ids, raw_texts)
+
+    research_result, _ = await _run_research_stage_from_paths(config, workspace, session_id, md_paths, num_pages, auto_page)
     design_instruction = f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
     design_result = await _run_design_free_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
