@@ -147,20 +147,6 @@ def _cover_info_block(presenter_name: str, emp_no: str, team_name: str) -> str:
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_\-.]+$")
 
 
-def _normalize_ids(ids) -> list[str]:
-    """ids를 무조건 ['a', 'b'] 형태의 문자열 리스트로 정규화.
-
-    'a,b' 같은 콤마 구분 문자열, ['a', 'b'] 같은 리스트, ['a,b'] 처럼 콤마가 섞인
-    리스트, 심지어 중첩 리스트까지 모두 평탄화해서 콤마로 최종 분리한다."""
-    if isinstance(ids, str):
-        return [part.strip() for part in ids.split(",") if part.strip()]
-
-    result: list[str] = []
-    for item in ids:
-        result.extend(_normalize_ids(item))
-    return result
-
-
 def _write_sources_as_markdown(workspace: Path, ids: list[str], raw_texts: dict[str, str]) -> list[Path]:
     """DB에서 조회한 id별 raw_text를 'sources/{id}.md' 로 저장하고 경로 목록을 반환."""
     for source_id in ids:
@@ -680,7 +666,7 @@ async def template_free_ppt_generation(
 
 @app.post("/template-based-ppt-generation-db", tags=["main"], summary="Template-Based-PPT-Generation-DB")
 async def template_based_ppt_generation_db(
-    ids: str = Form(..., description="sources 테이블에서 raw_text를 조회할 id 목록, 콤마로 구분 (예: a,b,c)"),
+    ids: list[str] = Form(..., description="sources 테이블에서 raw_text를 조회할 id 목록 (여러 개 전달 가능)"),
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
     export_filename: str = Form(default="slides.pptx"),
@@ -698,7 +684,6 @@ async def template_based_ppt_generation_db(
     from deeppresenter.tools.db import fetch_raw_texts
     from deeppresenter.utils.constants import WORKSPACE_BASE
 
-    ids = _normalize_ids(ids)
     if not ids:
         raise HTTPException(status_code=400, detail="ids must contain at least one id.")
 
@@ -731,7 +716,7 @@ async def template_based_ppt_generation_db(
 
 @app.post("/template-free-ppt-generation-db", tags=["main"], summary="Template-Free-PPT-Generation-DB")
 async def template_free_ppt_generation_db(
-    ids: str = Form(..., description="sources 테이블에서 raw_text를 조회할 id 목록, 콤마로 구분 (예: a,b,c)"),
+    ids: list[str] = Form(..., description="sources 테이블에서 raw_text를 조회할 id 목록 (여러 개 전달 가능)"),
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
     export_filename: str = Form(default="slides.pptx"),
@@ -749,7 +734,6 @@ async def template_free_ppt_generation_db(
     from deeppresenter.tools.db import fetch_raw_texts
     from deeppresenter.utils.constants import WORKSPACE_BASE
 
-    ids = _normalize_ids(ids)
     if not ids:
         raise HTTPException(status_code=400, detail="ids must contain at least one id.")
 
