@@ -147,9 +147,18 @@ def _cover_info_block(presenter_name: str, emp_no: str, team_name: str) -> str:
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_\-.]+$")
 
 
-def _normalize_ids(ids: str) -> list[str]:
-    """콤마로 구분된 'a,b' 형태의 ids 문자열을 ['a', 'b']로 분리."""
-    return [part.strip() for part in ids.split(",") if part.strip()]
+def _normalize_ids(ids) -> list[str]:
+    """ids를 무조건 ['a', 'b'] 형태의 문자열 리스트로 정규화.
+
+    'a,b' 같은 콤마 구분 문자열, ['a', 'b'] 같은 리스트, ['a,b'] 처럼 콤마가 섞인
+    리스트, 심지어 중첩 리스트까지 모두 평탄화해서 콤마로 최종 분리한다."""
+    if isinstance(ids, str):
+        return [part.strip() for part in ids.split(",") if part.strip()]
+
+    result: list[str] = []
+    for item in ids:
+        result.extend(_normalize_ids(item))
+    return result
 
 
 def _write_sources_as_markdown(workspace: Path, ids: list[str], raw_texts: dict[str, str]) -> list[Path]:
