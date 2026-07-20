@@ -147,6 +147,15 @@ def _cover_info_block(presenter_name: str, emp_no: str, team_name: str) -> str:
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_\-.]+$")
 
 
+def _split_ids(ids: list[str]) -> list[str]:
+    """list[str]=Form(...)로 여러 필드를 제대로 보낸 경우와, Swagger UI 등 일부 클라이언트가
+    'a,b' 처럼 한 필드에 콤마로 이어붙여 보내는 경우를 모두 지원하도록 각 원소를 콤마로 추가 분리."""
+    result = []
+    for raw in ids:
+        result.extend(part.strip() for part in raw.split(",") if part.strip())
+    return result
+
+
 def _write_sources_as_markdown(workspace: Path, ids: list[str], raw_texts: dict[str, str]) -> list[Path]:
     """DB에서 조회한 id별 raw_text를 'sources/{id}.md' 로 저장하고 경로 목록을 반환."""
     for source_id in ids:
@@ -684,6 +693,7 @@ async def template_based_ppt_generation_db(
     from deeppresenter.tools.db import fetch_raw_texts
     from deeppresenter.utils.constants import WORKSPACE_BASE
 
+    ids = _split_ids(ids)
     if not ids:
         raise HTTPException(status_code=400, detail="ids must contain at least one id.")
 
@@ -734,6 +744,7 @@ async def template_free_ppt_generation_db(
     from deeppresenter.tools.db import fetch_raw_texts
     from deeppresenter.utils.constants import WORKSPACE_BASE
 
+    ids = _split_ids(ids)
     if not ids:
         raise HTTPException(status_code=400, detail="ids must contain at least one id.")
 
