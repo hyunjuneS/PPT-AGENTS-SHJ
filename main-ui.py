@@ -147,13 +147,9 @@ def _cover_info_block(presenter_name: str, emp_no: str, team_name: str) -> str:
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_\-.]+$")
 
 
-def _normalize_ids(ids: list[str]) -> list[str]:
-    """FastAPI list[str]=Form(...)는 'ids' 필드를 여러 번 보내야 리스트로 파싱된다.
-    'ids=a,b' 처럼 한 필드에 콤마로 이어붙여 보낸 경우도 지원하도록 각 항목을 콤마로 추가 분리한다."""
-    result = []
-    for raw in ids:
-        result.extend(part.strip() for part in raw.split(",") if part.strip())
-    return result
+def _normalize_ids(ids: str) -> list[str]:
+    """콤마로 구분된 'a,b' 형태의 ids 문자열을 ['a', 'b']로 분리."""
+    return [part.strip() for part in ids.split(",") if part.strip()]
 
 
 def _write_sources_as_markdown(workspace: Path, ids: list[str], raw_texts: dict[str, str]) -> list[Path]:
@@ -675,7 +671,7 @@ async def template_free_ppt_generation(
 
 @app.post("/template-based-ppt-generation-db", tags=["main"], summary="Template-Based-PPT-Generation-DB")
 async def template_based_ppt_generation_db(
-    ids: list[str] = Form(..., description="sources 테이블에서 raw_text를 조회할 id 목록 (여러 개 전달 가능)"),
+    ids: str = Form(..., description="sources 테이블에서 raw_text를 조회할 id 목록, 콤마로 구분 (예: a,b,c)"),
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
     export_filename: str = Form(default="slides.pptx"),
@@ -726,7 +722,7 @@ async def template_based_ppt_generation_db(
 
 @app.post("/template-free-ppt-generation-db", tags=["main"], summary="Template-Free-PPT-Generation-DB")
 async def template_free_ppt_generation_db(
-    ids: list[str] = Form(..., description="sources 테이블에서 raw_text를 조회할 id 목록 (여러 개 전달 가능)"),
+    ids: str = Form(..., description="sources 테이블에서 raw_text를 조회할 id 목록, 콤마로 구분 (예: a,b,c)"),
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
     export_filename: str = Form(default="slides.pptx"),
