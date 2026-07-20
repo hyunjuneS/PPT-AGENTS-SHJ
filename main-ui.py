@@ -5,6 +5,7 @@ import secrets
 import string
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
@@ -129,14 +130,16 @@ def _random_emp_no() -> str:
 
 
 def _cover_info_block(presenter_name: str, emp_no: str, team_name: str) -> str:
-    """Design 에이전트 instruction에 덧붙여 첫 페이지(커버)에 이름/사번/팀명을 반영시키는 지시문."""
+    """Design 에이전트 instruction에 덧붙여 첫 페이지(커버)의 팀명/이름(사번)/날짜 자리를 채우는 지시문.
+    날짜는 요청을 받은 시점의 날짜를 'YY.MM.DD' 형식(예: 26.07.20)으로 사용한다."""
+    date_str = datetime.now().strftime("%y.%m.%d")
     return (
-        "Cover slide (slide_01) must display the following presenter information. "
-        "Replace or add only the fields below on the cover slide — keep every other "
-        "element, structure, and style unchanged:\n"
-        f"- Name: {presenter_name}\n"
-        f"- Employee No: {emp_no}\n"
-        f"- Team: {team_name}"
+        "Cover slide (slide_01) already has placeholder fields for team name, "
+        "name(employee no), and date. Replace ONLY those fields with the values below — "
+        "keep every other element, structure, and style unchanged:\n"
+        f"- Team name: {team_name}\n"
+        f"- Name(Employee No): {presenter_name}({emp_no})\n"
+        f"- Date: {date_str}"
     )
 
 
