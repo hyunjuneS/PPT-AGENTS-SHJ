@@ -194,6 +194,9 @@ def read_file(path: str, offset: int = 0, length: int = 200) -> str:
     p = Path(path)
     assert p.exists(), f"File not found: {path}"
     lines = p.read_text(encoding="utf-8").splitlines()
+    total = len(lines)
+    if offset >= total:
+        return f"(EOF — file has {total} lines total, offset {offset} is past the end)"
     chunk = lines[offset: offset + length]
     result = "\n".join(chunk)
     if len(result) > TOOL_CUTOFF_LEN:
