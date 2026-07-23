@@ -81,7 +81,7 @@ _TOOL_ICON = {
 
 def _shorten(s: str, n: int = 60) -> str:
     s = s.strip().replace("\n", " ")
-    return s[:n] + "…" if len(s) > n else s
+    return "…" + s[-n:] if len(s) > n else s
 
 
 def show_agent_start(name: str, max_turns: int | None = None) -> None:

@@ -30,11 +30,14 @@ def _get_chromium_executable() -> str | None:
 
 
 async def _screenshot_slide(
-    html_file: str, aspect_ratio: str = "16:9"
+    html_file: str, aspect_ratio: str = "16:9", _retry: bool = True
 ) -> tuple[bytes | None, dict | None]:
     """HTML 슬라이드를 Playwright로 렌더링.
     (JPEG bytes, body 치수 dict{width,height,scrollWidth,scrollHeight}) 반환.
     실패 시 (None, None).
+
+    동시 요청으로 여러 Chromium이 한꺼번에 뜨는 순간의 자원 경합 때문에 launch가
+    간헐적으로 죽는 경우가 있어, 실패 시 한 번만 재시도한다.
     """
     if not _SCREENSHOT_JS.exists():
         warning("screenshot.js not found — visual inspect disabled")
@@ -87,6 +90,11 @@ async def _screenshot_slide(
             os.unlink(output)
         except Exception:
             pass
+
+    if _retry:
+        debug("Retrying _screenshot_slide once after failure")
+        return await _screenshot_slide(html_file, aspect_ratio, _retry=False)
+
     return None, None
 
 
