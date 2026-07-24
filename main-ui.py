@@ -329,11 +329,8 @@ async def _run_research_stage(config, workspace, session_id: str, file: UploadFi
     return await _run_research_stage_from_paths(config, workspace, session_id, [attachment_path], num_pages, auto_page)
 
 
-async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_file: str, instruction: str,
-                                   config_file_override: str | Path | None = None):
-    """원고(.md) → Design 에이전트(Hynix 템플릿)로 HTML 슬라이드 생성.
-    config_file_override를 넘기면 DESIGN_CONFIG_FILE env보다 그걸 우선한다 (DB 엔드포인트가
-    design-hynix-db.yaml을 강제하는 데 사용)."""
+async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_file: str, instruction: str):
+    """원고(.md) → Design 에이전트(Hynix 템플릿)로 HTML 슬라이드 생성."""
     from deeppresenter.graph.callbacks import get_langfuse_handler
     from deeppresenter.graph.design_graph import run_design_graph
     from deeppresenter.utils.typings import InputRequest
@@ -345,7 +342,7 @@ async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_f
     if tmpl_path and Path(tmpl_path).exists():
         template_content = Path(tmpl_path).read_text(encoding="utf-8")
 
-    config_file = config_file_override or os.environ.get("DESIGN_CONFIG_FILE") or None
+    config_file = os.environ.get("DESIGN_CONFIG_FILE") or None
 
     logger.info("[DesignHynixTemplate] session=%s lang=%s file=%s config=%s template=%s",
                 session_id, _LANGUAGE, Path(markdown_file).name,
@@ -369,11 +366,8 @@ async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_f
         raise HTTPException(status_code=500, detail=f"Design agent failed: {e}")
 
 
-async def _run_design_free_stage(config, workspace, session_id: str, markdown_file: str, instruction: str,
-                                  config_file_override: str | Path | None = None):
-    """원고(.md) → Design 에이전트(자유 템플릿)로 HTML 슬라이드 생성.
-    config_file_override를 넘기면 기본 DesignFreeTemplate.yaml 대신 그걸 쓴다 (DB 엔드포인트가
-    DesignFreeTemplate-db.yaml을 강제하는 데 사용)."""
+async def _run_design_free_stage(config, workspace, session_id: str, markdown_file: str, instruction: str):
+    """원고(.md) → Design 에이전트(자유 템플릿)로 HTML 슬라이드 생성."""
     from deeppresenter.graph.callbacks import get_langfuse_handler
     from deeppresenter.graph.design_graph import run_design_graph
     from deeppresenter.utils.constants import PACKAGE_DIR
@@ -381,7 +375,7 @@ async def _run_design_free_stage(config, workspace, session_id: str, markdown_fi
 
     req = InputRequest(instruction=instruction, language=_LANGUAGE)
 
-    config_file = config_file_override or (PACKAGE_DIR / "roles" / "DesignFreeTemplate.yaml")
+    config_file = PACKAGE_DIR / "roles" / "DesignFreeTemplate.yaml"
 
     logger.info("[DesignFreeTemplate] session=%s lang=%s file=%s config=%s",
                 session_id, _LANGUAGE, Path(markdown_file).name, config_file.name)
@@ -704,7 +698,7 @@ async def template_based_ppt_generation_db(
 ):
     """id 목록 → PostgreSQL sources 테이블에서 title/raw_text 조회 → '{id}.md' 파일로 저장 →
     Research 에이전트(research-db.yaml)로 여러 소스를 하나의 원고로 합성 →
-    Design(Hynix 템플릿, design-hynix-db.yaml) 에이전트로 슬라이드 생성,
+    Design(Hynix 템플릿) 에이전트로 슬라이드 생성,
     변환까지 한 요청에서 이어서 처리하고 PPTX를 반환한다."""
     from deeppresenter.tools.db import fetch_raw_texts
     from deeppresenter.utils.constants import PACKAGE_DIR, WORKSPACE_BASE
@@ -753,7 +747,6 @@ async def template_based_ppt_generation_db(
     design_instruction = f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
     design_result = await _run_design_hynix_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
-        config_file_override=PACKAGE_DIR / "roles" / "design-hynix-db.yaml",
     )
 
     return await _design_response(design_result, session_id, export_filename, emp_no)
@@ -776,7 +769,7 @@ async def template_free_ppt_generation_db(
 ):
     """id 목록 → PostgreSQL sources 테이블에서 title/raw_text 조회 → '{id}.md' 파일로 저장 →
     Research 에이전트(research-db.yaml)로 여러 소스를 하나의 원고로 합성 →
-    Design(자유 템플릿, DesignFreeTemplate-db.yaml) 에이전트로 슬라이드 생성,
+    Design(자유 템플릿) 에이전트로 슬라이드 생성,
     변환까지 한 요청에서 이어서 처리하고 PPTX를 반환한다."""
     from deeppresenter.tools.db import fetch_raw_texts
     from deeppresenter.utils.constants import PACKAGE_DIR, WORKSPACE_BASE
@@ -825,7 +818,6 @@ async def template_free_ppt_generation_db(
     design_instruction = f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
     design_result = await _run_design_free_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
-        config_file_override=PACKAGE_DIR / "roles" / "DesignFreeTemplate-db.yaml",
     )
 
     return await _design_response(design_result, session_id, export_filename, emp_no)
