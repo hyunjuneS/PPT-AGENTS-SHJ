@@ -1,4 +1,4 @@
-"""PostgreSQL의 sources 테이블에서 id별 raw_text를 조회."""
+"""PostgreSQL의 sources 테이블에서 id별 title/raw_text를 조회."""
 
 import logging
 import os
@@ -18,16 +18,17 @@ def _get_connection():
     )
 
 
-def fetch_raw_texts(ids: list[str]) -> dict[str, str]:
-    """sources 테이블에서 id 목록에 해당하는 raw_text를 조회해 {id: raw_text} 로 반환.
+def fetch_raw_texts(ids: list[str]) -> dict[str, dict]:
+    """sources 테이블에서 id 목록에 해당하는 title/raw_text를 조회해
+    {id: {"title": title, "raw_text": raw_text}} 로 반환.
 
-    ids 중 sources 테이블에 없는 값이 하나라도 있으면 ValueError.
+    ids 중 sources 테이블에 없는 값, 또는 raw_text가 null인 값이 하나라도 있으면 ValueError.
     """
     conn = _get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT id, raw_text FROM sources WHERE id = ANY(%s)", (ids,))
-            rows = dict(cur.fetchall())
+            cur.execute("SELECT id, title, raw_text FROM sources WHERE id = ANY(%s)", (ids,))
+            rows = {row[0]: {"title": row[1], "raw_text": row[2]} for row in cur.fetchall()}
     finally:
         conn.close()
 
@@ -35,5 +36,9 @@ def fetch_raw_texts(ids: list[str]) -> dict[str, str]:
     if missing:
         raise ValueError(f"sources not found for id(s): {', '.join(missing)}")
 
-    logger.info("[DB] fetched %d raw_text row(s) from sources", len(rows))
+    null_text = [i for i in ids if rows[i]["raw_text"] is None]
+    if null_text:
+        raise ValueError(f"raw_text is null for id(s): {', '.join(null_text)}")
+
+    logger.info("[DB] fetched %d source row(s) from sources", len(rows))
     return rows

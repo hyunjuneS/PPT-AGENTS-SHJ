@@ -156,8 +156,10 @@ def _split_ids(ids: list[str]) -> list[str]:
     return result
 
 
-def _write_sources_as_markdown(workspace: Path, ids: list[str], raw_texts: dict[str, str]) -> list[Path]:
-    """DB에서 조회한 id별 raw_text를 'sources/{id}.md' 로 저장하고 경로 목록을 반환."""
+def _write_sources_as_markdown(workspace: Path, ids: list[str], sources: dict[str, dict]) -> list[Path]:
+    """DB에서 조회한 id별 title/raw_text를 'sources/{id}.md' 로 저장하고 경로 목록을 반환.
+    파일 맨 앞에 식별 헤더(id, title)를 삽입해, Research 에이전트가 절대경로가 아니라
+    본문 내부 라벨만으로도 정확한 출처를 인용할 수 있게 한다."""
     for source_id in ids:
         if not _SAFE_ID_RE.match(source_id):
             raise HTTPException(status_code=400, detail=f"Invalid id (unsafe filename): {source_id}")
@@ -167,8 +169,10 @@ def _write_sources_as_markdown(workspace: Path, ids: list[str], raw_texts: dict[
 
     paths = []
     for source_id in ids:
+        title = sources[source_id]["title"] or "(untitled)"
+        header = f"<!-- SOURCE id={source_id} title={title} -->\n# {title}\n\n"
         path = sources_dir / f"{source_id}.md"
-        path.write_text(raw_texts[source_id], encoding="utf-8")
+        path.write_text(header + sources[source_id]["raw_text"], encoding="utf-8")
         paths.append(path)
     return paths
 
@@ -261,9 +265,12 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
 # ---------------------------------------------------------------------------
 
 async def _run_research_stage_from_paths(config, workspace, session_id: str, md_paths: list[Path],
-                                          num_pages: int, auto_page: bool):
+                                          num_pages: int, auto_page: bool,
+                                          instruction: str = _RESEARCH_DEFAULT_INSTRUCTION,
+                                          config_file: str | Path | None = None):
     """이미 workspace에 저장된 .md 파일 목록 → 슬라이드 원고(ResearchGraphResult) 생성.
-    /research, /template-*-ppt-generation(-db) 이 모두 이 헬퍼를 거쳐간다."""
+    /research, /template-*-ppt-generation(-db) 이 모두 이 헬퍼를 거쳐간다.
+    instruction/config_file을 넘기지 않으면 기존 기본 동작(Research.yaml, 고정 지시문) 그대로다."""
     from deeppresenter.agents.page_planner import decide_num_pages
     from deeppresenter.graph.callbacks import get_langfuse_handler
     from deeppresenter.graph.research_graph import run_research_graph
@@ -276,7 +283,7 @@ async def _run_research_stage_from_paths(config, workspace, session_id: str, md_
         resolved_num_pages = num_pages
 
     req = InputRequest(
-        instruction=_RESEARCH_DEFAULT_INSTRUCTION,
+        instruction=instruction,
         attachments=[str(p) for p in md_paths],
         num_pages=str(resolved_num_pages),
         language=_LANGUAGE,
@@ -295,6 +302,7 @@ async def _run_research_stage_from_paths(config, workspace, session_id: str, md_
             language=_LANGUAGE,
             langfuse_handler=get_langfuse_handler(session_id),
             session_id=session_id,
+            config_file=config_file,
         )
     except Exception as e:
         logger.error("[Research] failed: %s", e)
@@ -321,8 +329,11 @@ async def _run_research_stage(config, workspace, session_id: str, file: UploadFi
     return await _run_research_stage_from_paths(config, workspace, session_id, [attachment_path], num_pages, auto_page)
 
 
-async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_file: str, instruction: str):
-    """원고(.md) → Design 에이전트(Hynix 템플릿)로 HTML 슬라이드 생성."""
+async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_file: str, instruction: str,
+                                   config_file_override: str | Path | None = None):
+    """원고(.md) → Design 에이전트(Hynix 템플릿)로 HTML 슬라이드 생성.
+    config_file_override를 넘기면 DESIGN_CONFIG_FILE env보다 그걸 우선한다 (DB 엔드포인트가
+    design-hynix-db.yaml을 강제하는 데 사용)."""
     from deeppresenter.graph.callbacks import get_langfuse_handler
     from deeppresenter.graph.design_graph import run_design_graph
     from deeppresenter.utils.typings import InputRequest
@@ -334,7 +345,7 @@ async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_f
     if tmpl_path and Path(tmpl_path).exists():
         template_content = Path(tmpl_path).read_text(encoding="utf-8")
 
-    config_file = os.environ.get("DESIGN_CONFIG_FILE") or None
+    config_file = config_file_override or os.environ.get("DESIGN_CONFIG_FILE") or None
 
     logger.info("[DesignHynixTemplate] session=%s lang=%s file=%s config=%s template=%s",
                 session_id, _LANGUAGE, Path(markdown_file).name,
@@ -358,8 +369,11 @@ async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_f
         raise HTTPException(status_code=500, detail=f"Design agent failed: {e}")
 
 
-async def _run_design_free_stage(config, workspace, session_id: str, markdown_file: str, instruction: str):
-    """원고(.md) → Design 에이전트(자유 템플릿)로 HTML 슬라이드 생성."""
+async def _run_design_free_stage(config, workspace, session_id: str, markdown_file: str, instruction: str,
+                                  config_file_override: str | Path | None = None):
+    """원고(.md) → Design 에이전트(자유 템플릿)로 HTML 슬라이드 생성.
+    config_file_override를 넘기면 기본 DesignFreeTemplate.yaml 대신 그걸 쓴다 (DB 엔드포인트가
+    DesignFreeTemplate-db.yaml을 강제하는 데 사용)."""
     from deeppresenter.graph.callbacks import get_langfuse_handler
     from deeppresenter.graph.design_graph import run_design_graph
     from deeppresenter.utils.constants import PACKAGE_DIR
@@ -367,7 +381,7 @@ async def _run_design_free_stage(config, workspace, session_id: str, markdown_fi
 
     req = InputRequest(instruction=instruction, language=_LANGUAGE)
 
-    config_file = PACKAGE_DIR / "roles" / "DesignFreeTemplate.yaml"
+    config_file = config_file_override or (PACKAGE_DIR / "roles" / "DesignFreeTemplate.yaml")
 
     logger.info("[DesignFreeTemplate] session=%s lang=%s file=%s config=%s",
                 session_id, _LANGUAGE, Path(markdown_file).name, config_file.name)
@@ -686,12 +700,14 @@ async def template_based_ppt_generation_db(
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
+    additional_instruction: str | None = Form(default=None, description="Research 매뉴스크립트 작성 시 반영할 추가 지시사항 (예: 특정 내용을 강조해달라는 지시)"),
 ):
-    """id 목록 → PostgreSQL sources 테이블에서 raw_text 조회 → '{id}.md' 파일로 저장 →
-    Research 에이전트로 원고 생성 → Design(Hynix 템플릿) 에이전트로 슬라이드 생성,
+    """id 목록 → PostgreSQL sources 테이블에서 title/raw_text 조회 → '{id}.md' 파일로 저장 →
+    Research 에이전트(research-db.yaml)로 여러 소스를 하나의 원고로 합성 →
+    Design(Hynix 템플릿, design-hynix-db.yaml) 에이전트로 슬라이드 생성,
     변환까지 한 요청에서 이어서 처리하고 PPTX를 반환한다."""
     from deeppresenter.tools.db import fetch_raw_texts
-    from deeppresenter.utils.constants import WORKSPACE_BASE
+    from deeppresenter.utils.constants import PACKAGE_DIR, WORKSPACE_BASE
 
     ids = _split_ids(ids)
     if not ids:
@@ -706,19 +722,38 @@ async def template_based_ppt_generation_db(
     workspace.mkdir(parents=True, exist_ok=True)
 
     try:
-        raw_texts = fetch_raw_texts(ids)
+        sources = fetch_raw_texts(ids)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error("[TemplateBasedDB] DB fetch failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Database fetch failed: {e}")
 
-    md_paths = _write_sources_as_markdown(workspace, ids, raw_texts)
+    md_paths = _write_sources_as_markdown(workspace, ids, sources)
 
-    research_result, _ = await _run_research_stage_from_paths(config, workspace, session_id, md_paths, num_pages, auto_page)
+    manifest = "\n".join(
+        f"  {i}. id={sid} title={sources[sid]['title'] or '(untitled)'}"
+        for i, sid in enumerate(ids, start=1)
+    )
+    research_instruction = (
+        f"{_RESEARCH_DEFAULT_INSTRUCTION}\n\n"
+        f"You have been given {len(ids)} independent source document(s) on the same topic:\n"
+        f"{manifest}\n"
+        "Each source's full content is also available as an attachment file, whose content "
+        "starts with an in-file header repeating its id/title."
+    )
+    if additional_instruction:
+        research_instruction += f"\n\nAdditional instructions from the requester:\n{additional_instruction}"
+
+    research_result, _ = await _run_research_stage_from_paths(
+        config, workspace, session_id, md_paths, num_pages, auto_page,
+        instruction=research_instruction,
+        config_file=PACKAGE_DIR / "roles" / "research-db.yaml",
+    )
     design_instruction = f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
     design_result = await _run_design_hynix_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
+        config_file_override=PACKAGE_DIR / "roles" / "design-hynix-db.yaml",
     )
 
     return await _design_response(design_result, session_id, export_filename, emp_no)
@@ -737,12 +772,14 @@ async def template_free_ppt_generation_db(
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
+    additional_instruction: str | None = Form(default=None, description="Research 매뉴스크립트 작성 시 반영할 추가 지시사항 (예: 특정 내용을 강조해달라는 지시)"),
 ):
-    """id 목록 → PostgreSQL sources 테이블에서 raw_text 조회 → '{id}.md' 파일로 저장 →
-    Research 에이전트로 원고 생성 → Design(자유 템플릿) 에이전트로 슬라이드 생성,
+    """id 목록 → PostgreSQL sources 테이블에서 title/raw_text 조회 → '{id}.md' 파일로 저장 →
+    Research 에이전트(research-db.yaml)로 여러 소스를 하나의 원고로 합성 →
+    Design(자유 템플릿, DesignFreeTemplate-db.yaml) 에이전트로 슬라이드 생성,
     변환까지 한 요청에서 이어서 처리하고 PPTX를 반환한다."""
     from deeppresenter.tools.db import fetch_raw_texts
-    from deeppresenter.utils.constants import WORKSPACE_BASE
+    from deeppresenter.utils.constants import PACKAGE_DIR, WORKSPACE_BASE
 
     ids = _split_ids(ids)
     if not ids:
@@ -757,19 +794,38 @@ async def template_free_ppt_generation_db(
     workspace.mkdir(parents=True, exist_ok=True)
 
     try:
-        raw_texts = fetch_raw_texts(ids)
+        sources = fetch_raw_texts(ids)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error("[TemplateFreeDB] DB fetch failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Database fetch failed: {e}")
 
-    md_paths = _write_sources_as_markdown(workspace, ids, raw_texts)
+    md_paths = _write_sources_as_markdown(workspace, ids, sources)
 
-    research_result, _ = await _run_research_stage_from_paths(config, workspace, session_id, md_paths, num_pages, auto_page)
+    manifest = "\n".join(
+        f"  {i}. id={sid} title={sources[sid]['title'] or '(untitled)'}"
+        for i, sid in enumerate(ids, start=1)
+    )
+    research_instruction = (
+        f"{_RESEARCH_DEFAULT_INSTRUCTION}\n\n"
+        f"You have been given {len(ids)} independent source document(s) on the same topic:\n"
+        f"{manifest}\n"
+        "Each source's full content is also available as an attachment file, whose content "
+        "starts with an in-file header repeating its id/title."
+    )
+    if additional_instruction:
+        research_instruction += f"\n\nAdditional instructions from the requester:\n{additional_instruction}"
+
+    research_result, _ = await _run_research_stage_from_paths(
+        config, workspace, session_id, md_paths, num_pages, auto_page,
+        instruction=research_instruction,
+        config_file=PACKAGE_DIR / "roles" / "research-db.yaml",
+    )
     design_instruction = f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
     design_result = await _run_design_free_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
+        config_file_override=PACKAGE_DIR / "roles" / "DesignFreeTemplate-db.yaml",
     )
 
     return await _design_response(design_result, session_id, export_filename, emp_no)
