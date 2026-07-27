@@ -551,6 +551,62 @@ async def download_pptx(
     )
 
 
+@app.post("/download-separated-html", tags=["dev"])
+async def download_separated_html(
+    emp_no: str = Form(...),
+    export_filename: str = Form(..., description="MinIO에 저장된 파일명 (예: slides.pptx 또는 slides)"),
+):
+    """MinIO의 '{emp_no}/htmls/{export_filename stem}/' 아래 개별 슬라이드 html + css 파일을
+    모두 모아 zip으로 묶어 다운로드."""
+    from starlette.background import BackgroundTask
+
+    from deeppresenter.tools.storage import download_html_files
+
+    try:
+        local_path, prefix = download_html_files(emp_no, export_filename)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("[DownloadSeparatedHtml] MinIO download failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"MinIO download failed: {e}")
+
+    zip_filename = f"{Path(prefix.rstrip('/')).name}.zip"
+    return FileResponse(
+        path=local_path,
+        media_type="application/zip",
+        filename=zip_filename,
+        headers={"X-Minio-Prefix": prefix},
+        background=BackgroundTask(lambda: Path(local_path).unlink(missing_ok=True)),
+    )
+
+
+@app.post("/download-combined-html", tags=["dev"])
+async def download_combined_html(
+    emp_no: str = Form(...),
+    export_filename: str = Form(..., description="MinIO에 저장된 파일명 (예: slides.pptx 또는 slides)"),
+):
+    """MinIO의 '{emp_no}/concat_html/{export_filename stem}.html' 오브젝트를 조회해 다운로드."""
+    from starlette.background import BackgroundTask
+
+    from deeppresenter.tools.storage import download_combined_html as fetch_combined_html
+
+    try:
+        local_path, object_name = fetch_combined_html(emp_no, export_filename)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("[DownloadCombinedHtml] MinIO download failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"MinIO download failed: {e}")
+
+    return FileResponse(
+        path=local_path,
+        media_type="text/html",
+        filename=Path(object_name).name,
+        headers={"X-Minio-Object": object_name},
+        background=BackgroundTask(lambda: Path(local_path).unlink(missing_ok=True)),
+    )
+
+
 @app.post("/design-hynix-template", tags=["dev"])
 async def design_hynix_template(
     file: UploadFile = File(...),

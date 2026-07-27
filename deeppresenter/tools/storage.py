@@ -3,7 +3,9 @@
 import logging
 import os
 import re
+import shutil
 import tempfile
+import zipfile
 from functools import lru_cache
 from pathlib import Path
 
@@ -155,6 +157,65 @@ def download_pptx(emp_no: str, export_filename: str) -> tuple[str, str]:
     object_name = _object_name(emp_no, export_filename)
 
     fd, tmp_path = tempfile.mkstemp(suffix=".pptx")
+    os.close(fd)
+
+    client = _get_client()
+    try:
+        client.fget_object(bucket, object_name, tmp_path)
+    except S3Error as e:
+        Path(tmp_path).unlink(missing_ok=True)
+        if e.code in ("NoSuchKey", "NoSuchBucket"):
+            raise FileNotFoundError(f"Object not found: {bucket}/{object_name}") from e
+        raise
+
+    logger.info("[MinIO] downloaded %s/%s -> %s", bucket, object_name, tmp_path)
+    return tmp_path, object_name
+
+
+def download_html_files(emp_no: str, export_filename: str) -> tuple[str, str]:
+    """MinIO의 '{emp_no}/htmls/{export_filename stem}/' 아래 개별 슬라이드 html + css 파일을
+    모두 받아 하나의 zip으로 묶어 임시 파일로 반환한다.
+
+    반환값은 (내려받은 zip 로컬 경로, 오브젝트 prefix). 그 prefix 아래 파일이 하나도 없으면
+    FileNotFoundError.
+    """
+    bucket = os.environ["MINIO_FILE_BUCKET"]
+    stem = _filename_stem(export_filename)
+    prefix = f"{emp_no}/htmls/{stem}/"
+
+    client = _get_client()
+    object_names = [obj.object_name for obj in client.list_objects(bucket, prefix=prefix, recursive=True)]
+    if not object_names:
+        raise FileNotFoundError(f"No objects found under: {bucket}/{prefix}")
+
+    work_dir = Path(tempfile.mkdtemp())
+    zip_fd, zip_path = tempfile.mkstemp(suffix=".zip")
+    os.close(zip_fd)
+
+    try:
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for object_name in object_names:
+                arcname = object_name[len(prefix):]
+                local_path = work_dir / arcname
+                client.fget_object(bucket, object_name, str(local_path))
+                zf.write(local_path, arcname=arcname)
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+    logger.info("[MinIO] downloaded %d file(s) from %s/%s -> %s", len(object_names), bucket, prefix, zip_path)
+    return zip_path, prefix
+
+
+def download_combined_html(emp_no: str, export_filename: str) -> tuple[str, str]:
+    """MinIO의 '{emp_no}/concat_html/{export_filename stem}.html' 오브젝트를 임시 파일로 내려받는다.
+
+    반환값은 (내려받은 로컬 파일 경로, 오브젝트 이름). 존재하지 않으면 FileNotFoundError.
+    """
+    bucket = os.environ["MINIO_FILE_BUCKET"]
+    stem = _filename_stem(export_filename)
+    object_name = f"{emp_no}/concat_html/{stem}.html"
+
+    fd, tmp_path = tempfile.mkstemp(suffix=".html")
     os.close(fd)
 
     client = _get_client()
