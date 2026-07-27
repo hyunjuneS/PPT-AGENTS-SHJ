@@ -218,10 +218,13 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
     fail with "slides_dir not found" even though the files genuinely exist,
     just on another replica's local disk.
 
-    The PPTX is also uploaded to MinIO at "{emp_no}/slide/{export_filename}.pptx".
+    Uploads three artifacts to MinIO:
+    - the PPTX at "{emp_no}/slide/{export_filename}.pptx"
+    - every slide_*.html + global.css individually at "{emp_no}/htmls/{export_filename stem}/..."
+    - a single scrollable, self-contained combined HTML at "{emp_no}/concat_html/{export_filename stem}.html"
     """
-    from deeppresenter.tools.export import html_slides_to_pptx
-    from deeppresenter.tools.storage import upload_pptx
+    from deeppresenter.tools.export import combine_html_slides, html_slides_to_pptx
+    from deeppresenter.tools.storage import upload_combined_html, upload_html_files, upload_pptx
 
     slides_dir = result.slides_dir
     html_files = sorted(Path(slides_dir).glob("slide_*.html"))
@@ -244,6 +247,24 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
         logger.error("[Design] MinIO upload failed: %s", e)
         raise HTTPException(status_code=500, detail=f"MinIO upload failed: {e}")
 
+    css_path = Path(slides_dir) / "global.css"
+    html_bundle_files = [str(p) for p in html_files]
+    if css_path.exists():
+        html_bundle_files.append(str(css_path))
+    try:
+        htmls_object_names = upload_html_files(html_bundle_files, emp_no, export_filename)
+    except Exception as e:
+        logger.error("[Design] MinIO htmls upload failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"MinIO htmls upload failed: {e}")
+
+    combined_path = Path(slides_dir) / "combined.html"
+    try:
+        combine_html_slides(slides_dir, str(combined_path))
+        combined_object_name = upload_combined_html(str(combined_path), emp_no, export_filename)
+    except Exception as e:
+        logger.error("[Design] MinIO combined html upload failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"MinIO combined html upload failed: {e}")
+
     return FileResponse(
         path=str(pptx_path),
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -254,6 +275,8 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
             "X-Slide-Count": str(len(html_files)),
             "X-Turns": str(len(result.messages_log)),
             "X-Minio-Object": object_name,
+            "X-Minio-Htmls-Count": str(len(htmls_object_names)),
+            "X-Minio-Combined-Html": combined_object_name,
         },
     )
 

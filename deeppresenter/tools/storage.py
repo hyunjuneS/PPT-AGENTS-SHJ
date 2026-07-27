@@ -1,7 +1,8 @@
-"""생성된 PPTX 파일을 MinIO 오브젝트 스토리지에 업로드/다운로드."""
+"""생성된 PPTX/HTML 슬라이드를 MinIO 오브젝트 스토리지에 업로드/다운로드."""
 
 import logging
 import os
+import re
 import tempfile
 from functools import lru_cache
 from pathlib import Path
@@ -12,6 +13,8 @@ from minio.error import S3Error
 logger = logging.getLogger(__name__)
 
 PPTX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+HTML_CONTENT_TYPE = "text/html"
+CSS_CONTENT_TYPE = "text/css"
 
 
 @lru_cache(maxsize=1)
@@ -68,6 +71,77 @@ def upload_pptx(local_path: str, emp_no: str, export_filename: str) -> str:
 
     object_name = _resolve_unique_object_name(client, bucket, emp_no, export_filename)
     client.fput_object(bucket, object_name, local_path, content_type=PPTX_CONTENT_TYPE)
+    logger.info("[MinIO] uploaded %s -> %s/%s", local_path, bucket, object_name)
+    return object_name
+
+
+def _filename_stem(export_filename: str) -> str:
+    """export_filename에서 .pptx 확장자를 뗀 stem을 반환 (htmls/concat_html 카테고리의 파일/폴더명으로 재사용)."""
+    return export_filename[:-len(".pptx")] if export_filename.endswith(".pptx") else export_filename
+
+
+def _next_stem(stem: str) -> str:
+    """'{stem}' -> '{stem}_(1)', '{stem}_(1)' -> '{stem}_(2)', ..."""
+    m = re.match(r"^(.*)_\((\d+)\)$", stem)
+    if m:
+        return f"{m.group(1)}_({int(m.group(2)) + 1})"
+    return f"{stem}_(1)"
+
+
+def upload_html_files(local_files: list[str], emp_no: str, export_filename: str) -> list[str]:
+    """슬라이드 html N개 + global.css(local_files)를 MinIO에
+    '{emp_no}/htmls/{export_filename stem}/{원본 파일명}' 으로 각각 개별 업로드.
+
+    해당 stem 폴더가 이미 있으면(첫 파일 존재 여부로 판단) '_(1)', '_(2)', ... 를 붙여
+    비어있는 폴더를 찾는다 (기존 파일을 덮어쓰지 않음).
+
+    반환값은 업로드된 오브젝트 이름 목록.
+    """
+    if not local_files:
+        return []
+
+    bucket = os.environ["MINIO_FILE_BUCKET"]
+    client = _get_client()
+    if not client.bucket_exists(bucket):
+        client.make_bucket(bucket)
+
+    files = [Path(f) for f in local_files]
+    stem = _filename_stem(export_filename)
+    while _object_exists(client, bucket, f"{emp_no}/htmls/{stem}/{files[0].name}"):
+        stem = _next_stem(stem)
+
+    object_names = []
+    for f in files:
+        content_type = CSS_CONTENT_TYPE if f.suffix == ".css" else HTML_CONTENT_TYPE
+        object_name = f"{emp_no}/htmls/{stem}/{f.name}"
+        client.fput_object(bucket, object_name, str(f), content_type=content_type)
+        object_names.append(object_name)
+
+    logger.info("[MinIO] uploaded %d html/css file(s) -> %s/%s/htmls/%s/", len(object_names), bucket, emp_no, stem)
+    return object_names
+
+
+def upload_combined_html(local_path: str, emp_no: str, export_filename: str) -> str:
+    """세로로 스크롤 가능하게 합쳐진 self-contained HTML(local_path)을 MinIO에
+    '{emp_no}/concat_html/{export_filename stem}.html' 로 업로드.
+
+    같은 이름이 이미 있으면 '_(1)', '_(2)', ... 순으로 비어있는 이름을 찾아 저장한다
+    (기존 파일을 덮어쓰지 않음).
+
+    반환값은 업로드된 오브젝트 이름.
+    """
+    bucket = os.environ["MINIO_FILE_BUCKET"]
+    client = _get_client()
+    if not client.bucket_exists(bucket):
+        client.make_bucket(bucket)
+
+    stem = _filename_stem(export_filename)
+    object_name = f"{emp_no}/concat_html/{stem}.html"
+    while _object_exists(client, bucket, object_name):
+        stem = _next_stem(stem)
+        object_name = f"{emp_no}/concat_html/{stem}.html"
+
+    client.fput_object(bucket, object_name, local_path, content_type=HTML_CONTENT_TYPE)
     logger.info("[MinIO] uploaded %s -> %s/%s", local_path, bucket, object_name)
     return object_name
 
