@@ -220,7 +220,8 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
 
     Uploads three artifacts to MinIO:
     - the PPTX at "{emp_no}/slide/{export_filename}.pptx"
-    - every slide_*.html + global.css individually at "{emp_no}/htmls/{export_filename stem}/..."
+    - every slide_*.html + global.css + any local image (e.g. the hynix cover logo) individually
+      at "{emp_no}/htmls/{export_filename stem}/..."
     - a single scrollable, self-contained combined HTML at "{emp_no}/combined_html/{export_filename stem}.html"
     """
     from deeppresenter.tools.export import combine_html_slides, html_slides_to_pptx
@@ -248,7 +249,11 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
         raise HTTPException(status_code=500, detail=f"MinIO upload failed: {e}")
 
     css_path = Path(slides_dir) / "global.css"
-    html_bundle_files = [str(p) for p in html_files]
+    image_extensions = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")
+    image_files = sorted(
+        p for p in Path(slides_dir).iterdir() if p.is_file() and p.suffix.lower() in image_extensions
+    )
+    html_bundle_files = [str(p) for p in html_files] + [str(p) for p in image_files]
     if css_path.exists():
         html_bundle_files.append(str(css_path))
     try:

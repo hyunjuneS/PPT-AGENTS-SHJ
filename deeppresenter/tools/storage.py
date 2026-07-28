@@ -1,6 +1,7 @@
 """생성된 PPTX/HTML 슬라이드를 MinIO 오브젝트 스토리지에 업로드/다운로드."""
 
 import logging
+import mimetypes
 import os
 import re
 import shutil
@@ -91,7 +92,7 @@ def _next_stem(stem: str) -> str:
 
 
 def upload_html_files(local_files: list[str], emp_no: str, export_filename: str) -> list[str]:
-    """슬라이드 html N개 + global.css(local_files)를 MinIO에
+    """슬라이드 html N개 + global.css + 로컬 이미지(local_files)를 MinIO에
     '{emp_no}/htmls/{export_filename stem}/{원본 파일명}' 으로 각각 개별 업로드.
 
     해당 stem 폴더가 이미 있으면(첫 파일 존재 여부로 판단) '_(1)', '_(2)', ... 를 붙여
@@ -114,12 +115,17 @@ def upload_html_files(local_files: list[str], emp_no: str, export_filename: str)
 
     object_names = []
     for f in files:
-        content_type = CSS_CONTENT_TYPE if f.suffix == ".css" else HTML_CONTENT_TYPE
+        if f.suffix == ".css":
+            content_type = CSS_CONTENT_TYPE
+        elif f.suffix in (".html", ".htm"):
+            content_type = HTML_CONTENT_TYPE
+        else:
+            content_type = mimetypes.guess_type(f.name)[0] or "application/octet-stream"
         object_name = f"{emp_no}/htmls/{stem}/{f.name}"
         client.fput_object(bucket, object_name, str(f), content_type=content_type)
         object_names.append(object_name)
 
-    logger.info("[MinIO] uploaded %d html/css file(s) -> %s/%s/htmls/%s/", len(object_names), bucket, emp_no, stem)
+    logger.info("[MinIO] uploaded %d file(s) -> %s/%s/htmls/%s/", len(object_names), bucket, emp_no, stem)
     return object_names
 
 

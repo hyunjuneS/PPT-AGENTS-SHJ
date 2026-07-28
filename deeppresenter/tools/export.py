@@ -1,8 +1,11 @@
 """HTML slides → PPTX via Node.js (Playwright screenshot + PptxGenJS)."""
 
 import asyncio
+import base64
 import html as html_escape
+import mimetypes
 import os
+import re
 from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parents[1] / "html2pptx"
@@ -76,6 +79,46 @@ async def html_slides_to_pptx(
     return output_path
 
 
+_CSS_URL_RE = re.compile(r"url\(\s*(['\"]?)([^'\"()]+)\1\s*\)")
+_IMG_SRC_RE = re.compile(r'(<img\b[^>]*?\bsrc\s*=\s*)([\'"])([^\'"]+)\2', re.IGNORECASE)
+
+
+def _resolve_local_asset(path_str: str, base_dir: Path) -> Path | None:
+    if path_str.startswith(("data:", "http://", "https://", "//")):
+        return None
+    p = Path(path_str)
+    candidate = (p if p.is_absolute() else (base_dir / p)).resolve()
+    return candidate if candidate.is_file() else None
+
+
+def _to_data_uri(path: Path) -> str:
+    mime, _ = mimetypes.guess_type(str(path))
+    mime = mime or "application/octet-stream"
+    b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{b64}"
+
+
+def _inline_local_images(content: str, base_dir: Path) -> str:
+    """CSS `url(...)`와 `<img src="...">`로 참조된 로컬 이미지 파일을 base64 data URI로
+    치환한다 — 상대경로는 base_dir(=slides_dir) 기준으로, 절대경로는 그대로 존재 여부를 확인한다.
+    이렇게 해야 합쳐진 combined.html이 slides_dir 밖으로 옮겨져도(예: MinIO에서 단독으로
+    내려받은 경우) 이미지가 계속 보인다. data:/http(s):// 값이거나 로컬에서 실제 파일을
+    못 찾은 경우는 원본 그대로 둔다."""
+
+    def _url_repl(m: re.Match) -> str:
+        resolved = _resolve_local_asset(m.group(2), base_dir)
+        return f"url({_to_data_uri(resolved)})" if resolved else m.group(0)
+
+    def _img_repl(m: re.Match) -> str:
+        prefix, quote, raw_path = m.group(1), m.group(2), m.group(3)
+        resolved = _resolve_local_asset(raw_path, base_dir)
+        return f"{prefix}{quote}{_to_data_uri(resolved)}{quote}" if resolved else m.group(0)
+
+    content = _CSS_URL_RE.sub(_url_repl, content)
+    content = _IMG_SRC_RE.sub(_img_repl, content)
+    return content
+
+
 def combine_html_slides(
     slides_dir: str,
     output_path: str,
@@ -110,6 +153,7 @@ def combine_html_slides(
             content = content.replace("</head>", f"{style_tag}</head>", 1)
         else:
             content = style_tag + content
+        content = _inline_local_images(content, slides_path)
         escaped = html_escape.escape(content, quote=True)
         frames.append(
             f'<iframe class="combined-slide" scrolling="no" srcdoc="{escaped}" '
