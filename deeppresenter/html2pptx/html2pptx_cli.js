@@ -68,7 +68,11 @@ async function run() {
       console.error(`HTML directory not found: ${htmlDir}`);
       process.exit(1);
     }
-    htmlFiles = fg.sync("*.html", { cwd: htmlDir, absolute: true }).sort();
+    // slide_*.html만 대상으로 함 — global.css를 <link>로 참조하는 slides_dir엔
+    // combined.html(전체 슬라이드를 합친 미리보기용 산출물)도 같은 폴더에 놓이는데,
+    // 여기서 *.html로 다 긁으면 그것도 슬라이드로 오인해 변환 대상에 끼어든다
+    // (알파벳순 정렬이라 "combined.html"이 "slide_01.html"보다 앞에 와서 첫 페이지로 삽입됨).
+    htmlFiles = fg.sync("slide_*.html", { cwd: htmlDir, absolute: true }).sort();
   }
 
   if (!htmlFiles.length) {
