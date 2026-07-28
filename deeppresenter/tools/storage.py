@@ -78,7 +78,7 @@ def upload_pptx(local_path: str, emp_no: str, export_filename: str) -> str:
 
 
 def _filename_stem(export_filename: str) -> str:
-    """export_filename에서 .pptx 확장자를 뗀 stem을 반환 (htmls/concat_html 카테고리의 파일/폴더명으로 재사용)."""
+    """export_filename에서 .pptx 확장자를 뗀 stem을 반환 (htmls/combined_html 카테고리의 파일/폴더명으로 재사용)."""
     return export_filename[:-len(".pptx")] if export_filename.endswith(".pptx") else export_filename
 
 
@@ -125,7 +125,7 @@ def upload_html_files(local_files: list[str], emp_no: str, export_filename: str)
 
 def upload_combined_html(local_path: str, emp_no: str, export_filename: str) -> str:
     """세로로 스크롤 가능하게 합쳐진 self-contained HTML(local_path)을 MinIO에
-    '{emp_no}/concat_html/{export_filename stem}.html' 로 업로드.
+    '{emp_no}/combined_html/{export_filename stem}.html' 로 업로드.
 
     같은 이름이 이미 있으면 '_(1)', '_(2)', ... 순으로 비어있는 이름을 찾아 저장한다
     (기존 파일을 덮어쓰지 않음).
@@ -138,10 +138,10 @@ def upload_combined_html(local_path: str, emp_no: str, export_filename: str) -> 
         client.make_bucket(bucket)
 
     stem = _filename_stem(export_filename)
-    object_name = f"{emp_no}/concat_html/{stem}.html"
+    object_name = f"{emp_no}/combined_html/{stem}.html"
     while _object_exists(client, bucket, object_name):
         stem = _next_stem(stem)
-        object_name = f"{emp_no}/concat_html/{stem}.html"
+        object_name = f"{emp_no}/combined_html/{stem}.html"
 
     client.fput_object(bucket, object_name, local_path, content_type=HTML_CONTENT_TYPE)
     logger.info("[MinIO] uploaded %s -> %s/%s", local_path, bucket, object_name)
@@ -207,13 +207,13 @@ def download_html_files(emp_no: str, export_filename: str) -> tuple[str, str]:
 
 
 def download_combined_html(emp_no: str, export_filename: str) -> tuple[str, str]:
-    """MinIO의 '{emp_no}/concat_html/{export_filename stem}.html' 오브젝트를 임시 파일로 내려받는다.
+    """MinIO의 '{emp_no}/combined_html/{export_filename stem}.html' 오브젝트를 임시 파일로 내려받는다.
 
     반환값은 (내려받은 로컬 파일 경로, 오브젝트 이름). 존재하지 않으면 FileNotFoundError.
     """
     bucket = os.environ["MINIO_FILE_BUCKET"]
     stem = _filename_stem(export_filename)
-    object_name = f"{emp_no}/concat_html/{stem}.html"
+    object_name = f"{emp_no}/combined_html/{stem}.html"
 
     fd, tmp_path = tempfile.mkstemp(suffix=".html")
     os.close(fd)

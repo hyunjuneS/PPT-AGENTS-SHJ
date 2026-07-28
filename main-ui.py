@@ -221,7 +221,7 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
     Uploads three artifacts to MinIO:
     - the PPTX at "{emp_no}/slide/{export_filename}.pptx"
     - every slide_*.html + global.css individually at "{emp_no}/htmls/{export_filename stem}/..."
-    - a single scrollable, self-contained combined HTML at "{emp_no}/concat_html/{export_filename stem}.html"
+    - a single scrollable, self-contained combined HTML at "{emp_no}/combined_html/{export_filename stem}.html"
     """
     from deeppresenter.tools.export import combine_html_slides, html_slides_to_pptx
     from deeppresenter.tools.storage import upload_combined_html, upload_html_files, upload_pptx
@@ -585,7 +585,7 @@ async def download_combined_html(
     emp_no: str = Form(...),
     export_filename: str = Form(..., description="MinIO에 저장된 파일명 (예: slides.pptx 또는 slides)"),
 ):
-    """MinIO의 '{emp_no}/concat_html/{export_filename stem}.html' 오브젝트를 조회해 다운로드."""
+    """MinIO의 '{emp_no}/combined_html/{export_filename stem}.html' 오브젝트를 조회해 다운로드."""
     from starlette.background import BackgroundTask
 
     from deeppresenter.tools.storage import download_combined_html as fetch_combined_html
