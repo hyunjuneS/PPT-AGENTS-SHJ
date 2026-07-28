@@ -96,7 +96,12 @@ def combine_html_slides(
 
     css_path = slides_path / "global.css"
     global_css = css_path.read_text(encoding="utf-8") if css_path.exists() else ""
-    style_tag = f"<style>{global_css}</style>" if global_css else ""
+    # 브라우저 기본 UA 스타일은 <body>에 margin(보통 8px)을 넣는데, 슬라이드 자체 CSS가 이걸
+    # 0으로 재설정하지 않은 경우 실제 렌더링 크기가 iframe의 고정 뷰포트(width x height)보다
+    # 살짝 커져서 그 iframe 안에서만 스크롤이 생긴다. 원본 slide_NN.html은 건드리지 않고
+    # 합쳐진 문서에서만 명시적으로 0으로 강제해 이 여유분을 없앤다.
+    reset_css = "html,body{margin:0 !important;padding:0 !important;}"
+    style_tag = f"<style>{reset_css}{global_css}</style>"
 
     frames = []
     for slide_file in slide_files:
@@ -107,8 +112,8 @@ def combine_html_slides(
             content = style_tag + content
         escaped = html_escape.escape(content, quote=True)
         frames.append(
-            f'<iframe class="combined-slide" srcdoc="{escaped}" '
-            f'style="width:{width}px;height:{height}px;border:0;display:block;'
+            f'<iframe class="combined-slide" scrolling="no" srcdoc="{escaped}" '
+            f'style="width:{width}px;height:{height}px;border:0;display:block;overflow:hidden;'
             f'margin:0 auto 24px auto;box-shadow:0 2px 10px rgba(0,0,0,.15);"></iframe>'
         )
 
