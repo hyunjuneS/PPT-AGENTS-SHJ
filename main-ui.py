@@ -222,7 +222,8 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
     - the PPTX at "{emp_no}/slide/{export_filename}.pptx"
     - every slide_*.html + global.css + any local image (e.g. the hynix cover logo) individually
       at "{emp_no}/htmls/{export_filename stem}/..."
-    - a single scrollable, self-contained combined HTML at "{emp_no}/combined_html/{export_filename stem}.html"
+    - the scrollable combined HTML + those same local images (it references them by relative
+      path, so they must ship together) at "{emp_no}/combined_html/{export_filename stem}/..."
     """
     from deeppresenter.tools.export import combine_html_slides, html_slides_to_pptx
     from deeppresenter.tools.storage import upload_combined_html, upload_html_files, upload_pptx
@@ -265,7 +266,8 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
     combined_path = Path(slides_dir) / "combined.html"
     try:
         combine_html_slides(slides_dir, str(combined_path))
-        combined_object_name = upload_combined_html(str(combined_path), emp_no, export_filename)
+        combined_bundle_files = [str(combined_path)] + [str(p) for p in image_files]
+        combined_object_names = upload_combined_html(combined_bundle_files, emp_no, export_filename)
     except Exception as e:
         logger.error("[Design] MinIO combined html upload failed: %s", e)
         raise HTTPException(status_code=500, detail=f"MinIO combined html upload failed: {e}")
@@ -281,7 +283,7 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
             "X-Turns": str(len(result.messages_log)),
             "X-Minio-Object": object_name,
             "X-Minio-Htmls-Count": str(len(htmls_object_names)),
-            "X-Minio-Combined-Html": combined_object_name,
+            "X-Minio-Combined-Html-Count": str(len(combined_object_names)),
         },
     )
 
@@ -590,24 +592,27 @@ async def download_combined_html(
     emp_no: str = Form(...),
     export_filename: str = Form(..., description="MinIO에 저장된 파일명 (예: slides.pptx 또는 slides)"),
 ):
-    """MinIO의 '{emp_no}/combined_html/{export_filename stem}.html' 오브젝트를 조회해 다운로드."""
+    """MinIO의 '{emp_no}/combined_html/{export_filename stem}/' 아래 combined.html + 그 로컬 이미지
+    (예: 하이닉스 커버 로고)를 모두 모아 zip으로 묶어 다운로드 — combined.html이 이미지를 상대경로로
+    참조하므로 이미지 없이 combined.html만 받으면 렌더링이 깨진다."""
     from starlette.background import BackgroundTask
 
     from deeppresenter.tools.storage import download_combined_html as fetch_combined_html
 
     try:
-        local_path, object_name = fetch_combined_html(emp_no, export_filename)
+        local_path, prefix = fetch_combined_html(emp_no, export_filename)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error("[DownloadCombinedHtml] MinIO download failed: %s", e)
         raise HTTPException(status_code=500, detail=f"MinIO download failed: {e}")
 
+    zip_filename = f"{Path(prefix.rstrip('/')).name}.zip"
     return FileResponse(
         path=local_path,
-        media_type="text/html",
-        filename=Path(object_name).name,
-        headers={"X-Minio-Object": object_name},
+        media_type="application/zip",
+        filename=zip_filename,
+        headers={"X-Minio-Prefix": prefix},
         background=BackgroundTask(lambda: Path(local_path).unlink(missing_ok=True)),
     )
 

@@ -91,14 +91,18 @@ def _next_stem(stem: str) -> str:
     return f"{stem}_(1)"
 
 
-def upload_html_files(local_files: list[str], emp_no: str, export_filename: str) -> list[str]:
-    """슬라이드 html N개 + global.css + 로컬 이미지(local_files)를 MinIO에
-    '{emp_no}/htmls/{export_filename stem}/{원본 파일명}' 으로 각각 개별 업로드.
+def _content_type_for(path: Path) -> str:
+    if path.suffix == ".css":
+        return CSS_CONTENT_TYPE
+    if path.suffix in (".html", ".htm"):
+        return HTML_CONTENT_TYPE
+    return mimetypes.guess_type(path.name)[0] or "application/octet-stream"
 
-    해당 stem 폴더가 이미 있으면(첫 파일 존재 여부로 판단) '_(1)', '_(2)', ... 를 붙여
-    비어있는 폴더를 찾는다 (기존 파일을 덮어쓰지 않음).
 
-    반환값은 업로드된 오브젝트 이름 목록.
+def _upload_files_under_prefix(local_files: list[str], emp_no: str, export_filename: str, category: str) -> list[str]:
+    """local_files를 MinIO에 '{emp_no}/{category}/{export_filename stem}/{원본 파일명}' 으로
+    각각 개별 업로드. 해당 stem 폴더가 이미 있으면(첫 파일 존재 여부로 판단) '_(1)', '_(2)', ...
+    를 붙여 비어있는 폴더를 찾는다 (기존 파일을 덮어쓰지 않음). 반환값은 업로드된 오브젝트 이름 목록.
     """
     if not local_files:
         return []
@@ -110,48 +114,32 @@ def upload_html_files(local_files: list[str], emp_no: str, export_filename: str)
 
     files = [Path(f) for f in local_files]
     stem = _filename_stem(export_filename)
-    while _object_exists(client, bucket, f"{emp_no}/htmls/{stem}/{files[0].name}"):
+    while _object_exists(client, bucket, f"{emp_no}/{category}/{stem}/{files[0].name}"):
         stem = _next_stem(stem)
 
     object_names = []
     for f in files:
-        if f.suffix == ".css":
-            content_type = CSS_CONTENT_TYPE
-        elif f.suffix in (".html", ".htm"):
-            content_type = HTML_CONTENT_TYPE
-        else:
-            content_type = mimetypes.guess_type(f.name)[0] or "application/octet-stream"
-        object_name = f"{emp_no}/htmls/{stem}/{f.name}"
-        client.fput_object(bucket, object_name, str(f), content_type=content_type)
+        object_name = f"{emp_no}/{category}/{stem}/{f.name}"
+        client.fput_object(bucket, object_name, str(f), content_type=_content_type_for(f))
         object_names.append(object_name)
 
-    logger.info("[MinIO] uploaded %d file(s) -> %s/%s/htmls/%s/", len(object_names), bucket, emp_no, stem)
+    logger.info("[MinIO] uploaded %d file(s) -> %s/%s/%s/%s/", len(object_names), bucket, emp_no, category, stem)
     return object_names
 
 
-def upload_combined_html(local_path: str, emp_no: str, export_filename: str) -> str:
-    """세로로 스크롤 가능하게 합쳐진 self-contained HTML(local_path)을 MinIO에
-    '{emp_no}/combined_html/{export_filename stem}.html' 로 업로드.
+def upload_html_files(local_files: list[str], emp_no: str, export_filename: str) -> list[str]:
+    """슬라이드 html N개 + global.css + 로컬 이미지(local_files)를 MinIO에
+    '{emp_no}/htmls/{export_filename stem}/{원본 파일명}' 으로 각각 개별 업로드.
+    반환값은 업로드된 오브젝트 이름 목록."""
+    return _upload_files_under_prefix(local_files, emp_no, export_filename, category="htmls")
 
-    같은 이름이 이미 있으면 '_(1)', '_(2)', ... 순으로 비어있는 이름을 찾아 저장한다
-    (기존 파일을 덮어쓰지 않음).
 
-    반환값은 업로드된 오브젝트 이름.
-    """
-    bucket = os.environ["MINIO_FILE_BUCKET"]
-    client = _get_client()
-    if not client.bucket_exists(bucket):
-        client.make_bucket(bucket)
-
-    stem = _filename_stem(export_filename)
-    object_name = f"{emp_no}/combined_html/{stem}.html"
-    while _object_exists(client, bucket, object_name):
-        stem = _next_stem(stem)
-        object_name = f"{emp_no}/combined_html/{stem}.html"
-
-    client.fput_object(bucket, object_name, local_path, content_type=HTML_CONTENT_TYPE)
-    logger.info("[MinIO] uploaded %s -> %s/%s", local_path, bucket, object_name)
-    return object_name
+def upload_combined_html(local_files: list[str], emp_no: str, export_filename: str) -> list[str]:
+    """세로로 스크롤 가능하게 합쳐진 combined.html + 그 안에서 상대경로로 참조하는 로컬
+    이미지(local_files)를 MinIO에 '{emp_no}/combined_html/{export_filename stem}/{원본 파일명}'
+    으로 각각 개별 업로드 — combined.html의 이미지 참조는 상대경로 그대로이므로, 이미지들이
+    같은 폴더에 함께 있어야 렌더링된다. 반환값은 업로드된 오브젝트 이름 목록."""
+    return _upload_files_under_prefix(local_files, emp_no, export_filename, category="combined_html")
 
 
 def download_pptx(emp_no: str, export_filename: str) -> tuple[str, str]:
@@ -178,16 +166,13 @@ def download_pptx(emp_no: str, export_filename: str) -> tuple[str, str]:
     return tmp_path, object_name
 
 
-def download_html_files(emp_no: str, export_filename: str) -> tuple[str, str]:
-    """MinIO의 '{emp_no}/htmls/{export_filename stem}/' 아래 개별 슬라이드 html + css 파일을
-    모두 받아 하나의 zip으로 묶어 임시 파일로 반환한다.
-
-    반환값은 (내려받은 zip 로컬 경로, 오브젝트 prefix). 그 prefix 아래 파일이 하나도 없으면
-    FileNotFoundError.
-    """
+def _download_files_under_prefix(emp_no: str, export_filename: str, category: str) -> tuple[str, str]:
+    """MinIO의 '{emp_no}/{category}/{export_filename stem}/' 아래 파일 전부를 하나의 zip으로
+    묶어 임시 파일로 반환한다. 반환값은 (내려받은 zip 로컬 경로, 오브젝트 prefix).
+    그 prefix 아래 파일이 하나도 없으면 FileNotFoundError."""
     bucket = os.environ["MINIO_FILE_BUCKET"]
     stem = _filename_stem(export_filename)
-    prefix = f"{emp_no}/htmls/{stem}/"
+    prefix = f"{emp_no}/{category}/{stem}/"
 
     client = _get_client()
     object_names = [obj.object_name for obj in client.list_objects(bucket, prefix=prefix, recursive=True)]
@@ -212,26 +197,13 @@ def download_html_files(emp_no: str, export_filename: str) -> tuple[str, str]:
     return zip_path, prefix
 
 
+def download_html_files(emp_no: str, export_filename: str) -> tuple[str, str]:
+    """MinIO의 '{emp_no}/htmls/{export_filename stem}/' 아래 개별 슬라이드 html + css + 이미지
+    파일을 모두 받아 하나의 zip으로 묶어 임시 파일로 반환한다."""
+    return _download_files_under_prefix(emp_no, export_filename, category="htmls")
+
+
 def download_combined_html(emp_no: str, export_filename: str) -> tuple[str, str]:
-    """MinIO의 '{emp_no}/combined_html/{export_filename stem}.html' 오브젝트를 임시 파일로 내려받는다.
-
-    반환값은 (내려받은 로컬 파일 경로, 오브젝트 이름). 존재하지 않으면 FileNotFoundError.
-    """
-    bucket = os.environ["MINIO_FILE_BUCKET"]
-    stem = _filename_stem(export_filename)
-    object_name = f"{emp_no}/combined_html/{stem}.html"
-
-    fd, tmp_path = tempfile.mkstemp(suffix=".html")
-    os.close(fd)
-
-    client = _get_client()
-    try:
-        client.fget_object(bucket, object_name, tmp_path)
-    except S3Error as e:
-        Path(tmp_path).unlink(missing_ok=True)
-        if e.code in ("NoSuchKey", "NoSuchBucket"):
-            raise FileNotFoundError(f"Object not found: {bucket}/{object_name}") from e
-        raise
-
-    logger.info("[MinIO] downloaded %s/%s -> %s", bucket, object_name, tmp_path)
-    return tmp_path, object_name
+    """MinIO의 '{emp_no}/combined_html/{export_filename stem}/' 아래 combined.html + 그 로컬
+    이미지 파일을 모두 받아 하나의 zip으로 묶어 임시 파일로 반환한다."""
+    return _download_files_under_prefix(emp_no, export_filename, category="combined_html")

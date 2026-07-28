@@ -1,11 +1,8 @@
 """HTML slides → PPTX via Node.js (Playwright screenshot + PptxGenJS)."""
 
 import asyncio
-import base64
 import html as html_escape
-import mimetypes
 import os
-import re
 from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parents[1] / "html2pptx"
@@ -79,58 +76,23 @@ async def html_slides_to_pptx(
     return output_path
 
 
-_CSS_URL_RE = re.compile(r"url\(\s*(['\"]?)([^'\"()]+)\1\s*\)")
-_IMG_SRC_RE = re.compile(r'(<img\b[^>]*?\bsrc\s*=\s*)([\'"])([^\'"]+)\2', re.IGNORECASE)
-
-
-def _resolve_local_asset(path_str: str, base_dir: Path) -> Path | None:
-    if path_str.startswith(("data:", "http://", "https://", "//")):
-        return None
-    p = Path(path_str)
-    candidate = (p if p.is_absolute() else (base_dir / p)).resolve()
-    return candidate if candidate.is_file() else None
-
-
-def _to_data_uri(path: Path) -> str:
-    mime, _ = mimetypes.guess_type(str(path))
-    mime = mime or "application/octet-stream"
-    b64 = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:{mime};base64,{b64}"
-
-
-def _inline_local_images(content: str, base_dir: Path) -> str:
-    """CSS `url(...)`와 `<img src="...">`로 참조된 로컬 이미지 파일을 base64 data URI로
-    치환한다 — 상대경로는 base_dir(=slides_dir) 기준으로, 절대경로는 그대로 존재 여부를 확인한다.
-    이렇게 해야 합쳐진 combined.html이 slides_dir 밖으로 옮겨져도(예: MinIO에서 단독으로
-    내려받은 경우) 이미지가 계속 보인다. data:/http(s):// 값이거나 로컬에서 실제 파일을
-    못 찾은 경우는 원본 그대로 둔다."""
-
-    def _url_repl(m: re.Match) -> str:
-        resolved = _resolve_local_asset(m.group(2), base_dir)
-        return f"url({_to_data_uri(resolved)})" if resolved else m.group(0)
-
-    def _img_repl(m: re.Match) -> str:
-        prefix, quote, raw_path = m.group(1), m.group(2), m.group(3)
-        resolved = _resolve_local_asset(raw_path, base_dir)
-        return f"{prefix}{quote}{_to_data_uri(resolved)}{quote}" if resolved else m.group(0)
-
-    content = _CSS_URL_RE.sub(_url_repl, content)
-    content = _IMG_SRC_RE.sub(_img_repl, content)
-    return content
-
-
 def combine_html_slides(
     slides_dir: str,
     output_path: str,
     width: int = 1280,
     height: int = 720,
 ) -> str:
-    """slides_dir의 slide_*.html N개(+ global.css)를 세로로 스크롤 가능한 하나의
-    self-contained HTML로 합쳐 output_path에 저장하고 그 경로를 반환한다.
+    """slides_dir의 slide_*.html N개(+ global.css)를 세로로 스크롤 가능한 하나의 HTML로
+    합쳐 output_path에 저장하고 그 경로를 반환한다.
 
     각 슬라이드는 원본 문서 전체(글로벌 css를 <style>로 인라인해 넣은 버전)를
     <iframe srcdoc="...">로 통째로 embed한다 — 슬라이드마다 독립된 문서로 렌더링되므로
     슬라이드 간 CSS 선택자/id 충돌 없이 원본 그대로의 모습을 유지한다.
+
+    로컬 이미지 참조(배경 이미지 url(), <img src>)는 원본 그대로 상대경로를 유지한다 —
+    srcdoc 안의 상대경로는 이 함수가 만든 output_path(=combined.html)의 위치를 기준으로
+    풀리므로, combined.html과 그 이미지 파일들이 항상 같은 폴더에 함께 있어야 렌더링된다
+    (호출부가 이미지들도 combined.html과 같이 묶어서 배포/업로드해야 함).
     """
     slides_path = Path(slides_dir)
     slide_files = sorted(slides_path.glob("slide_*.html"))
@@ -153,7 +115,6 @@ def combine_html_slides(
             content = content.replace("</head>", f"{style_tag}</head>", 1)
         else:
             content = style_tag + content
-        content = _inline_local_images(content, slides_path)
         escaped = html_escape.escape(content, quote=True)
         frames.append(
             f'<iframe class="combined-slide" scrolling="no" srcdoc="{escaped}" '
