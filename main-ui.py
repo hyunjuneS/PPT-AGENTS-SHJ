@@ -232,11 +232,17 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
     - the scrollable combined HTML + global.css + those same local images at ".../combined_html/...".
       Each slide inside combined.html still references global.css via its own <link>, so global.css
       must ship alongside it too, or every slide renders unstyled.
+
+    Before any of that, injects a small JS/SVG chart-rendering script into any slide_*.html that
+    has a data-chart-type element, so the chart is actually visible when viewing the html/combined
+    html directly in a browser (html2pptx.js only ever turned it into a native PPTX chart — the
+    div itself was otherwise empty in plain HTML).
     """
-    from deeppresenter.tools.export import combine_html_slides, html_slides_to_pptx
+    from deeppresenter.tools.export import combine_html_slides, html_slides_to_pptx, inject_chart_rendering
     from deeppresenter.tools.storage import upload_combined_html, upload_html_files, upload_pptx
 
     slides_dir = result.slides_dir
+    inject_chart_rendering(slides_dir)
     html_files = sorted(Path(slides_dir).glob("slide_*.html"))
 
     pptx_path = Path(slides_dir) / export_filename
