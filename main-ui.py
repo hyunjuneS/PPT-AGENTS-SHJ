@@ -225,12 +225,12 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
     fail with "slides_dir not found" even though the files genuinely exist,
     just on another replica's local disk.
 
-    Uploads three artifacts to MinIO:
-    - the PPTX at "{emp_no}/slide/{export_filename}.pptx"
+    Uploads three artifacts to MinIO, all under "{emp_no}/{export_filename stem}/":
+    - the PPTX at ".../ppt/{export_filename stem}.pptx"
     - every slide_*.html + global.css + any local image (e.g. the hynix cover logo) individually
-      at "{emp_no}/htmls/{export_filename stem}/..."
+      at ".../htmls/..."
     - the scrollable combined HTML + those same local images (it references them by relative
-      path, so they must ship together) at "{emp_no}/combined_html/{export_filename stem}/..."
+      path, so they must ship together) at ".../combined_html/..."
     """
     from deeppresenter.tools.export import combine_html_slides, html_slides_to_pptx
     from deeppresenter.tools.storage import upload_combined_html, upload_html_files, upload_pptx
@@ -493,7 +493,7 @@ async def export_pptx(
     """HTML 슬라이드 폴더(slides_dir) → PPTX 파일 변환 후 다운로드 (16:9 고정).
     soft=True(기본): 검증 경고는 로그로만 출력하고 PPTX 생성 계속.
     soft=False: 검증 오류 발생 시 변환 중단.
-    생성된 PPTX는 MinIO에도 "{emp_no}/slide/{filename}.pptx" 로 업로드된다.
+    생성된 PPTX는 MinIO에도 "{emp_no}/{filename stem}/ppt/{filename stem}.pptx" 로 업로드된다.
     """
     from deeppresenter.tools.export import html_slides_to_pptx
     from deeppresenter.tools.storage import upload_pptx
@@ -543,7 +543,7 @@ async def download_pptx(
     emp_no: str = Form(...),
     export_filename: str = Form(..., description="MinIO에 저장된 파일명 (예: slides.pptx 또는 slides)"),
 ):
-    """MinIO의 '{emp_no}/slide/{export_filename}.pptx' 오브젝트를 조회해 다운로드."""
+    """MinIO의 '{emp_no}/{export_filename stem}/ppt/{export_filename stem}.pptx' 오브젝트를 조회해 다운로드."""
     from starlette.background import BackgroundTask
 
     from deeppresenter.tools.storage import download_pptx as fetch_pptx
@@ -570,7 +570,7 @@ async def download_separated_html(
     emp_no: str = Form(...),
     export_filename: str = Form(..., description="MinIO에 저장된 파일명 (예: slides.pptx 또는 slides)"),
 ):
-    """MinIO의 '{emp_no}/htmls/{export_filename stem}/' 아래 개별 슬라이드 html + css 파일을
+    """MinIO의 '{emp_no}/{export_filename stem}/htmls/' 아래 개별 슬라이드 html + css 파일을
     모두 모아 zip으로 묶어 다운로드."""
     from starlette.background import BackgroundTask
 
@@ -599,7 +599,7 @@ async def download_combined_html(
     emp_no: str = Form(...),
     export_filename: str = Form(..., description="MinIO에 저장된 파일명 (예: slides.pptx 또는 slides)"),
 ):
-    """MinIO의 '{emp_no}/combined_html/{export_filename stem}/' 아래 combined.html + 그 로컬 이미지
+    """MinIO의 '{emp_no}/{export_filename stem}/combined_html/' 아래 combined.html + 그 로컬 이미지
     (예: 하이닉스 커버 로고)를 모두 모아 zip으로 묶어 다운로드 — combined.html이 이미지를 상대경로로
     참조하므로 이미지 없이 combined.html만 받으면 렌더링이 깨진다."""
     from starlette.background import BackgroundTask
@@ -629,7 +629,7 @@ async def design_hynix_template(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
     export_filename: str = Form(default="slides.pptx"),
-    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
@@ -669,7 +669,7 @@ async def design_free_template(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
     export_filename: str = Form(default="slides.pptx"),
-    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
@@ -713,7 +713,7 @@ async def template_based_ppt_generation(
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
     export_filename: str = Form(default="slides.pptx"),
-    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
@@ -748,7 +748,7 @@ async def template_free_ppt_generation(
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
     export_filename: str = Form(default="slides.pptx"),
-    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
@@ -783,7 +783,7 @@ async def template_based_ppt_generation_db(
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
     export_filename: str = Form(default="slides.pptx"),
-    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
@@ -854,7 +854,7 @@ async def template_free_ppt_generation_db(
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
     export_filename: str = Form(default="slides.pptx"),
-    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
