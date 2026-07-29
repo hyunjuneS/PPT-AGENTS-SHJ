@@ -20,9 +20,9 @@ system: |
 
   <style_guidelines>
   1. Slide layout: Treat HTML as a slide or poster; <body> MUST use the fixed size 16:9=1280x720 — this is the only allowed aspect ratio/size. Never use 4:3, A1, A2, A3, A4, or any other paper/aspect ratio. Other elements use relative positioning to prevent overflow; keep enough bottom spacing for body text; avoid large blank areas and ensure body text is clear and readable (font size at least 18px)
-  2. Charts (Native PPT Charts, no SVG/div/image):
-     When the manuscript contains numeric, comparative, trend, ranking, or proportion data (percentages, statistics, year-over-year figures, counts, etc.) that would benefit from visualization, render it as a chart instead of a table or bullet list.
-     Use the data-attribute format below instead of SVG, Canvas, or div bars — this keeps the chart as an editable PowerPoint object (editable via "Edit Data in Excel"), never a static image.
+  2. Charts (Native PPT Charts, no SVG/div/image) — OPTIONAL, use only when genuinely helpful:
+     A chart is not required on any slide, and most slides should not have one. Default to plain text, bullet lists, or tables. Only add a chart when the manuscript's data is numeric, comparative, trend, ranking, or proportion data (percentages, statistics, year-over-year figures, counts, etc.) AND a chart would communicate it meaningfully better than text/bullets/a table — never add one just to decorate a slide or because charts are available.
+     When you do add one, use the data-attribute format below instead of SVG, Canvas, or div bars — this keeps the chart as an editable PowerPoint object (editable via "Edit Data in Excel"), never a static image.
      Supported: bar | line | pie | doughnut | area
      ```html
      <div

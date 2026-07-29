@@ -97,6 +97,31 @@ _CHART_RENDER_SCRIPT = f"""<script>/* {_CHART_RENDER_MARKER} */(function() {{
     if (!c) return defaultColor(i);
     return c[0] === '#' ? c : ('#' + c);
   }}
+  function niceStep(maxVal, ticks) {{
+    var rough = maxVal / ticks;
+    var mag = Math.pow(10, Math.floor(Math.log(rough) / Math.LN10));
+    var norm = rough / mag;
+    var step;
+    if (norm < 1.5) step = 1;
+    else if (norm < 3) step = 2;
+    else if (norm < 7) step = 5;
+    else step = 10;
+    return step * mag;
+  }}
+  function fmtTick(v) {{
+    return (Math.round(v * 100) / 100).toString();
+  }}
+  function renderYAxis(svg, m, iw, ih, maxVal) {{
+    var step = niceStep(maxVal, 5);
+    var niceMax = Math.ceil(maxVal / step) * step;
+    for (var v = 0; v <= niceMax + 1e-9; v += step) {{
+      var y = m.top + ih - (v / niceMax) * ih;
+      svg.appendChild(svgEl('line', {{ x1: m.left, y1: y, x2: m.left + iw, y2: y, stroke: '#e0e0e0', 'stroke-width': 1 }}));
+      var t = svgEl('text', {{ x: m.left - 6, y: y, 'text-anchor': 'end', 'dominant-baseline': 'middle', 'font-size': 10, fill: '#666' }});
+      t.textContent = fmtTick(v); svg.appendChild(t);
+    }}
+    return niceMax;
+  }}
   function renderBar(svg, W, H, labels, series, colors, barDir) {{
     var m = {{ top: 20, right: 20, bottom: 40, left: 46 }};
     var iw = W - m.left - m.right, ih = H - m.top - m.bottom;
@@ -105,28 +130,30 @@ _CHART_RENDER_SCRIPT = f"""<script>/* {_CHART_RENDER_MARKER} */(function() {{
     if (maxVal <= 0) maxVal = 1;
     var n = labels.length || 1, sc = series.length || 1;
     if (barDir === 'bar') {{
+      var niceMax = renderYAxis(svg, m, iw, ih, maxVal);
       var groupH = ih / n, barH = (groupH * 0.7) / sc;
       labels.forEach(function(label, i) {{
         series.forEach(function(s, si) {{
           var val = (s.values || [])[i] || 0;
-          var w = (val / maxVal) * iw;
+          var w = (val / niceMax) * iw;
           var y = m.top + i * groupH + groupH * 0.15 + si * barH;
           svg.appendChild(svgEl('rect', {{ x: m.left, y: y, width: Math.max(w, 0), height: barH * 0.9, fill: toHex(colors[si], si) }}));
         }});
-        var t = svgEl('text', {{ x: m.left - 6, y: m.top + i * groupH + groupH / 2, 'text-anchor': 'end', 'dominant-baseline': 'middle', 'font-size': 11 }});
+        var t = svgEl('text', {{ x: m.left - 6, y: m.top + i * groupH + groupH / 2, 'text-anchor': 'end', 'dominant-baseline': 'middle', 'font-size': 11, fill: '#333' }});
         t.textContent = label; svg.appendChild(t);
       }});
     }} else {{
+      var niceMax = renderYAxis(svg, m, iw, ih, maxVal);
       var groupW = iw / n, barW = (groupW * 0.7) / sc;
       labels.forEach(function(label, i) {{
         series.forEach(function(s, si) {{
           var val = (s.values || [])[i] || 0;
-          var h = (val / maxVal) * ih;
+          var h = (val / niceMax) * ih;
           var x = m.left + i * groupW + groupW * 0.15 + si * barW;
           var y = m.top + ih - h;
           svg.appendChild(svgEl('rect', {{ x: x, y: y, width: barW * 0.9, height: Math.max(h, 0), fill: toHex(colors[si], si) }}));
         }});
-        var t = svgEl('text', {{ x: m.left + i * groupW + groupW / 2, y: m.top + ih + 16, 'text-anchor': 'middle', 'font-size': 11 }});
+        var t = svgEl('text', {{ x: m.left + i * groupW + groupW / 2, y: m.top + ih + 16, 'text-anchor': 'middle', 'font-size': 11, fill: '#333' }});
         t.textContent = label; svg.appendChild(t);
       }});
     }}
@@ -138,10 +165,11 @@ _CHART_RENDER_SCRIPT = f"""<script>/* {_CHART_RENDER_MARKER} */(function() {{
     var maxVal = 0;
     series.forEach(function(s) {{ (s.values || []).forEach(function(v) {{ if (v > maxVal) maxVal = v; }}); }});
     if (maxVal <= 0) maxVal = 1;
+    var niceMax = renderYAxis(svg, m, iw, ih, maxVal);
     var n = labels.length || 1;
     var stepX = n > 1 ? iw / (n - 1) : iw;
     series.forEach(function(s, si) {{
-      var pts = (s.values || []).map(function(v, i) {{ return [m.left + i * stepX, m.top + ih - (v / maxVal) * ih]; }});
+      var pts = (s.values || []).map(function(v, i) {{ return [m.left + i * stepX, m.top + ih - (v / niceMax) * ih]; }});
       var color = toHex(colors[si], si);
       var d = pts.map(function(p, i) {{ return (i === 0 ? 'M' : 'L') + p[0] + ',' + p[1]; }}).join(' ');
       if (filled && pts.length) {{
@@ -153,7 +181,7 @@ _CHART_RENDER_SCRIPT = f"""<script>/* {_CHART_RENDER_MARKER} */(function() {{
       pts.forEach(function(p) {{ svg.appendChild(svgEl('circle', {{ cx: p[0], cy: p[1], r: 3, fill: color }})); }});
     }});
     labels.forEach(function(label, i) {{
-      var t = svgEl('text', {{ x: m.left + i * stepX, y: m.top + ih + 16, 'text-anchor': 'middle', 'font-size': 11 }});
+      var t = svgEl('text', {{ x: m.left + i * stepX, y: m.top + ih + 16, 'text-anchor': 'middle', 'font-size': 11, fill: '#333' }});
       t.textContent = label; svg.appendChild(t);
     }});
     svg.appendChild(svgEl('line', {{ x1: m.left, y1: m.top + ih, x2: m.left + iw, y2: m.top + ih, stroke: '#999' }}));
@@ -187,7 +215,7 @@ _CHART_RENDER_SCRIPT = f"""<script>/* {_CHART_RENDER_MARKER} */(function() {{
       labels.forEach(function(label, i) {{
         var ly = H / 2 - (labels.length * 18) / 2 + i * 18;
         svg.appendChild(svgEl('rect', {{ x: lx, y: ly, width: 10, height: 10, fill: toHex(colors[i], i) }}));
-        var t = svgEl('text', {{ x: lx + 14, y: ly + 9, 'font-size': 11 }});
+        var t = svgEl('text', {{ x: lx + 14, y: ly + 9, 'font-size': 11, fill: '#333' }});
         t.textContent = label; svg.appendChild(t);
       }});
     }}
