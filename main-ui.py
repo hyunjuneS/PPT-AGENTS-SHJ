@@ -27,6 +27,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# openai SDK가 내부적으로 쓰는 httpx의 요청/응답 로그를 켜둔다.
+# "openai._base_client: Retrying request..." 메시지만으로는 재시도 원인(429 rate limit인지,
+# 5xx인지, 커넥션 문제인지)을 알 수 없는데, httpx를 INFO로 올려두면 그 바로 옆에
+# 'HTTP Request: POST .../chat/completions "HTTP/1.1 429 Too Many Requests"' 식으로
+# 실제 상태 코드가 같이 찍혀서 원인을 바로 확인할 수 있다.
+logging.getLogger("httpx").setLevel(logging.INFO)
+
 app = FastAPI(title="PPT Agent API", version="0.2.0")
 
 
