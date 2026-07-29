@@ -229,8 +229,9 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
     - the PPTX at ".../ppt/{export_filename stem}.pptx"
     - every slide_*.html + global.css + any local image (e.g. the hynix cover logo) individually
       at ".../htmls/..."
-    - the scrollable combined HTML + those same local images (it references them by relative
-      path, so they must ship together) at ".../combined_html/..."
+    - the scrollable combined HTML + global.css + those same local images at ".../combined_html/...".
+      Each slide inside combined.html still references global.css via its own <link>, so global.css
+      must ship alongside it too, or every slide renders unstyled.
     """
     from deeppresenter.tools.export import combine_html_slides, html_slides_to_pptx
     from deeppresenter.tools.storage import upload_combined_html, upload_html_files, upload_pptx
@@ -274,6 +275,8 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
     try:
         combine_html_slides(slides_dir, str(combined_path))
         combined_bundle_files = [str(combined_path)] + [str(p) for p in image_files]
+        if css_path.exists():
+            combined_bundle_files.append(str(css_path))
         combined_object_names = upload_combined_html(combined_bundle_files, emp_no, export_filename)
     except Exception as e:
         logger.error("[Design] MinIO combined html upload failed: %s", e)

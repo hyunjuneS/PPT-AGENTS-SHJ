@@ -143,10 +143,11 @@ def upload_html_files(local_files: list[str], emp_no: str, export_filename: str)
 
 
 def upload_combined_html(local_files: list[str], emp_no: str, export_filename: str) -> list[str]:
-    """세로로 스크롤 가능하게 합쳐진 combined.html + 그 안에서 상대경로로 참조하는 로컬
-    이미지(local_files)를 MinIO에 '{emp_no}/{export_filename stem}/combined_html/{원본 파일명}'
-    으로 각각 개별 업로드 — combined.html의 이미지 참조는 상대경로 그대로이므로, 이미지들이
-    같은 폴더에 함께 있어야 렌더링된다. 반환값은 업로드된 오브젝트 이름 목록."""
+    """세로로 스크롤 가능하게 합쳐진 combined.html + 그 안에서 상대경로로 참조하는 global.css/
+    로컬 이미지(local_files)를 MinIO에 '{emp_no}/{export_filename stem}/combined_html/{원본 파일명}'
+    으로 각각 개별 업로드 — combined.html 안 각 슬라이드는 여전히 <link href="global.css">로
+    스타일을 가져오고 이미지도 상대경로 그대로이므로, global.css와 이미지들이 combined.html과
+    같은 폴더에 함께 있어야 정상적으로 렌더링된다. 반환값은 업로드된 오브젝트 이름 목록."""
     return _upload_files_under_prefix(local_files, emp_no, export_filename, category="combined_html")
 
 
