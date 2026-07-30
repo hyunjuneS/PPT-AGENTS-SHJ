@@ -9,7 +9,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-from difflib import SequenceMatcher
 from pathlib import Path
 
 from deeppresenter.utils.constants import HEAVY_REFLECT, TOOL_CUTOFF_LEN
@@ -395,79 +394,98 @@ INSPECT_MANUSCRIPT_SPEC = {
 
 # ── inspect_content ───────────────────────────────────────────────────────────
 
-# A term/number is "distinctive" if it's a number (data point) or a word long
-# enough to not be a common filler word — used as a cheap proxy for "did this
-# fact from the source make it into the manuscript" without an extra LLM call.
-_NUMBER_RE = re.compile(r"\b\d[\d,.]*%?\b")
-_WORD_RE = re.compile(r"[A-Za-z가-힣]{4,}")
+# Fallback only — used if this tool is ever invoked without an `llm` bound to it
+# (e.g. the old engine, deeppresenter/agents/, which doesn't support bound tool
+# kwargs). The graph engine always binds the role's own resolved LLM instead
+# (see build_tools_for_role in deeppresenter/graph/tools.py), so this path uses
+# the exact same model/base_url/api_key the research agent itself is using.
+_FALLBACK_BASE_URL = "http://workplace-litellm.aipp02.skhynix.com/v1"
+
+_MAX_REVIEW_CHARS = 60_000  # cap manuscript+sources sent for this review call only
+
+_CONTENT_REVIEW_SYSTEM_PROMPT = """You are a meticulous editor reviewing a presentation manuscript
+(Markdown, pages separated by `---`) for content-quality problems that a page-count/size
+check cannot catch. Check for exactly three things:
+1. Balance: is content spread reasonably evenly across pages, or are some pages nearly
+   empty while others are overloaded? The first page (cover) and last page (closing) are
+   expected to be short by design — never flag them for this.
+2. Duplication: does any page repeat a fact or point already made on another page?
+3. Omission: is there any key fact, data point, or claim in the source documents (if
+   provided) that does not appear anywhere in the manuscript?
+Respond with STRICT JSON ONLY — no markdown fences, no commentary — matching exactly this
+shape: {"issues": ["<specific issue, naming the page number(s) or source file involved>"]}.
+If there are no issues, respond with {"issues": []}."""
+
+_CONTENT_REVIEW_USER_TEMPLATE = """<manuscript>
+{manuscript}
+</manuscript>
+
+{sources_block}
+
+Respond with STRICT JSON ONLY, exactly in this shape: {{"issues": ["..."]}} (empty list if none)."""
 
 
-def _distinctive_terms(text: str) -> set[str]:
-    return {m.lower() for m in _NUMBER_RE.findall(text)} | {m.lower() for m in _WORD_RE.findall(text)}
+def _default_llm():
+    from deeppresenter.utils.config import LLM
+    return LLM(
+        model=os.environ.get("MODEL_BIG", "claude-opus-4-5"),
+        base_url=os.environ.get("OPENAI_BASE_URL") or _FALLBACK_BASE_URL,
+        api_key=os.environ.get("OPENAI_API_KEY", ""),
+    )
 
 
-def inspect_content(path: str, sources_dir: str | None = None) -> str:
+def _truncate(text: str, max_chars: int) -> str:
+    text = text.strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + f"\n... (truncated, original length {len(text)} characters)"
+
+
+async def inspect_content(path: str, sources_dir: str | None = None, llm=None) -> str:
     """
-    Check a Markdown manuscript for content-quality issues that inspect_manuscript
-    (page count/size only) does not catch:
-    - Balance: flags pages far thinner/denser than the manuscript's average.
-    - Duplication: flags page pairs whose text is highly similar.
-    - Omission: flags source documents (in sources_dir) whose distinctive terms/numbers
-      barely show up anywhere in the manuscript.
+    LLM-based content-quality review of a Markdown manuscript that inspect_manuscript
+    (page count/size only) does not catch: whether content is evenly distributed across
+    pages, whether any pages duplicate each other, and whether any source document's
+    content is missing from the manuscript.
     """
     p = Path(path)
     assert p.exists() and p.suffix == ".md", f"Not a valid .md file: {path}"
     content = p.read_text(encoding="utf-8")
     assert content.strip(), "Manuscript is empty"
 
-    pages = [s.strip() for s in content.split("---") if s.strip()]
-    assert pages, "Manuscript has no pages (no non-empty '---' separated sections)"
-
-    issues: list[str] = []
-
-    # Balance — skip the cover (first) and closing (last) page: those are expected
-    # to be short/title-only by design (see Research.yaml), not a content gap.
-    word_counts = [len(page.split()) for page in pages]
-    body_counts = word_counts[1:-1] if len(word_counts) > 2 else []
-    if body_counts:
-        avg_words = sum(body_counts) / len(body_counts)
-        for i, wc in enumerate(word_counts[1:-1], start=2):
-            if wc < avg_words * 0.25:
-                issues.append(f"Page {i} looks too thin ({wc} words vs. average {avg_words:.0f}).")
-            elif wc > avg_words * 2.5:
-                issues.append(f"Page {i} looks overloaded ({wc} words vs. average {avg_words:.0f}).")
-    else:
-        avg_words = sum(word_counts) / len(word_counts)
-
-    # Duplication
-    SIM_THRESHOLD = 0.6
-    for i in range(len(pages)):
-        for j in range(i + 1, len(pages)):
-            ratio = SequenceMatcher(None, pages[i], pages[j]).ratio()
-            if ratio >= SIM_THRESHOLD:
-                issues.append(f"Page {i + 1} and page {j + 1} look like duplicated content ({ratio:.0%} similar).")
-
-    # Omission — compare against source documents, if any are available
     src_dir = Path(sources_dir) if sources_dir else p.parent / "sources"
+    sources_block = "(no source documents available to check omission against)"
     if src_dir.is_dir():
-        manuscript_terms = _distinctive_terms(content)
-        for src_file in sorted(src_dir.glob("*.md")):
-            source_terms = _distinctive_terms(src_file.read_text(encoding="utf-8"))
-            if not source_terms:
-                continue
-            coverage = len(source_terms & manuscript_terms) / len(source_terms)
-            if coverage < 0.3:
-                issues.append(
-                    f"Source '{src_file.name}' has low coverage in the manuscript "
-                    f"({coverage:.0%} of its key terms/numbers appear) — content from it may be missing."
-                )
+        src_files = sorted(src_dir.glob("*.md"))
+        if src_files:
+            parts = [
+                f'<source name="{f.name}">\n{f.read_text(encoding="utf-8")}\n</source>'
+                for f in src_files
+            ]
+            sources_block = "<source_documents>\n" + "\n\n".join(parts) + "\n</source_documents>"
+
+    from deeppresenter.utils.config import get_json_from_response
+
+    messages = [
+        {"role": "system", "content": _CONTENT_REVIEW_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": _CONTENT_REVIEW_USER_TEMPLATE.format(
+                manuscript=_truncate(content, _MAX_REVIEW_CHARS),
+                sources_block=_truncate(sources_block, _MAX_REVIEW_CHARS),
+            ),
+        },
+    ]
+
+    response = await (llm or _default_llm()).run(messages=messages)
+    text = response.choices[0].message.content or ""
+    parsed = get_json_from_response(text)
+    issues = parsed.get("issues") if isinstance(parsed, dict) else None
+    issues = issues or []
 
     if issues:
         return "Issues found:\n" + "\n".join(f"- {i}" for i in issues)
-    return (
-        f"Content looks good: {len(pages)} page(s), avg {avg_words:.0f} words/page, "
-        "no duplication or omission detected."
-    )
+    return "Content looks good: no balance, duplication, or omission issues found."
 
 
 INSPECT_CONTENT_SPEC = {

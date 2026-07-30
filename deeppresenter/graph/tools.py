@@ -72,11 +72,16 @@ def build_tools_for_role(
     tools_dict: dict[str, dict],
     server_tools: dict[str, list[str]],
     finalize_overrides: dict[str, Any] | None = None,
+    llm: Any | None = None,
 ) -> list[StructuredTool]:
     """finalize_overrides lets the caller bind e.g. agent_name="Design" onto the
     finalize tool at construction time (mirrors the old engine's post-hoc
     args["agent_name"] = self.name injection in Agent.execute(), agent.py:275-276,
-    without mutating call arguments after the fact)."""
+    without mutating call arguments after the fact).
+
+    llm, if given, is bound onto inspect_content the same way — so its content
+    review runs on the exact same model/base_url/api_key the calling role's own
+    chat_model uses, not a separately-configured one."""
     specs = resolve_toolset(role_config.toolset, tools_dict, server_tools)
 
     structured_tools: list[StructuredTool] = []
@@ -86,6 +91,8 @@ def build_tools_for_role(
         func: Callable = raw_func
         if name == "finalize" and finalize_overrides:
             func = _bind_kwargs(raw_func, **finalize_overrides)
+        elif name == "inspect_content" and llm is not None:
+            func = _bind_kwargs(raw_func, llm=llm)
 
         args_model = _build_args_model(spec, raw_func)
         kwargs: dict[str, Any] = dict(

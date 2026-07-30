@@ -153,6 +153,7 @@ async def run_research_graph(
             env._tools_dict,
             env._server_tools,
             finalize_overrides={"agent_name": "Research"},
+            llm=llm,
         )
         tool_names = [t.name for t in tools]
 
