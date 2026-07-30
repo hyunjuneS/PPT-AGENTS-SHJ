@@ -15,16 +15,14 @@ system: |
      - Generate only one slide at a time, and immediately call `inspect_slide` for quality checks; if any issues are reported, complete all fixes and re-run checks until the page meets the usable standard before proceeding to the next slide
      - If the slide contains a `data-chart-type` element, pay special attention to the `inspect_slide` screenshot: the chart renders there only as a dashed placeholder box labeled `[CHART: <type>]` reserving its final position — carefully verify this box does not visually overlap any text, image, or other element. If it does, move or resize the overlapping elements and call `inspect_slide` again until there is no overlap.
 
-  4. Before finalizing, check whether any generated slide contains a `data-chart-type` element. If none does, go back to the most numeric/data-heavy slide and edit it (via `edit_file`) to add a chart using the Charts guideline. The deck must not be finalized without at least one chart.
-
-  5. After generating all slides, call the `finalize` tool to return the slides folder and end the workflow
+  4. After generating all slides, call the `finalize` tool to return the slides folder and end the workflow
   </workflow>
 
   <style_guidelines>
   1. Slide layout: Treat HTML as a slide or poster; <body> MUST use the fixed size 16:9=1280x720 — this is the only allowed aspect ratio/size. Never use 4:3, A1, A2, A3, A4, or any other paper/aspect ratio. Other elements use relative positioning to prevent overflow; keep enough bottom spacing for body text; avoid large blank areas and ensure body text is clear and readable (font size at least 18px)
-  2. Charts (Native PPT Charts — MANDATORY, no SVG/div/image):
-     At least one slide in the deck MUST use a native chart. If the manuscript contains any numeric, comparative, trend, ranking, or proportion data (percentages, statistics, year-over-year figures, counts, etc.), render it as a chart instead of a table or bullet list.
-     Use the data-attribute format below instead of SVG, Canvas, or div bars — this keeps the chart as an editable PowerPoint object (editable via "Edit Data in Excel"), never a static image.
+  2. Charts (Native PPT Charts, no SVG/div/image) — OPTIONAL, use only when genuinely helpful:
+     A chart is not required on any slide, and most slides should not have one. Default to plain text, bullet lists, or tables. Only add a chart when the manuscript's data is numeric, comparative, trend, ranking, or proportion data (percentages, statistics, year-over-year figures, counts, etc.) AND a chart would communicate it meaningfully better than text/bullets/a table — never add one just to decorate a slide or because charts are available.
+     When you do add one, use the data-attribute format below instead of SVG, Canvas, or div bars — this keeps the chart as an editable PowerPoint object (editable via "Edit Data in Excel"), never a static image.
      Supported: bar | line | pie | doughnut | area
      ```html
      <div

@@ -27,6 +27,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# openai SDK가 내부적으로 쓰는 httpx의 요청/응답 로그를 켜둔다.
+# "openai._base_client: Retrying request..." 메시지만으로는 재시도 원인(429 rate limit인지,
+# 5xx인지, 커넥션 문제인지)을 알 수 없는데, httpx를 INFO로 올려두면 그 바로 옆에
+# 'HTTP Request: POST .../chat/completions "HTTP/1.1 429 Too Many Requests"' 식으로
+# 실제 상태 코드가 같이 찍혀서 원인을 바로 확인할 수 있다.
+logging.getLogger("httpx").setLevel(logging.INFO)
+
 app = FastAPI(title="PPT Agent API", version="0.2.0")
 
 
@@ -156,8 +163,10 @@ def _split_ids(ids: list[str]) -> list[str]:
     return result
 
 
-def _write_sources_as_markdown(workspace: Path, ids: list[str], raw_texts: dict[str, str]) -> list[Path]:
-    """DB에서 조회한 id별 raw_text를 'sources/{id}.md' 로 저장하고 경로 목록을 반환."""
+def _write_sources_as_markdown(workspace: Path, ids: list[str], sources: dict[str, dict]) -> list[Path]:
+    """DB에서 조회한 id별 title/raw_text를 'sources/{id}.md' 로 저장하고 경로 목록을 반환.
+    파일 맨 앞에 식별 헤더(id, title)를 삽입해, Research 에이전트가 절대경로가 아니라
+    본문 내부 라벨만으로도 정확한 출처를 인용할 수 있게 한다."""
     for source_id in ids:
         if not _SAFE_ID_RE.match(source_id):
             raise HTTPException(status_code=400, detail=f"Invalid id (unsafe filename): {source_id}")
@@ -167,8 +176,10 @@ def _write_sources_as_markdown(workspace: Path, ids: list[str], raw_texts: dict[
 
     paths = []
     for source_id in ids:
+        title = sources[source_id]["title"] or "(untitled)"
+        header = f"<!-- SOURCE id={source_id} title={title} -->\n# {title}\n\n"
         path = sources_dir / f"{source_id}.md"
-        path.write_text(raw_texts[source_id], encoding="utf-8")
+        path.write_text(header + sources[source_id]["raw_text"], encoding="utf-8")
         paths.append(path)
     return paths
 
@@ -214,12 +225,24 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
     fail with "slides_dir not found" even though the files genuinely exist,
     just on another replica's local disk.
 
-    The PPTX is also uploaded to MinIO at "{emp_no}/slide/{export_filename}.pptx".
+    Uploads three artifacts to MinIO, all under "{emp_no}/{export_filename stem}/":
+    - the PPTX at ".../ppt/{export_filename stem}.pptx"
+    - every slide_*.html + global.css + any local image (e.g. the hynix cover logo) individually
+      at ".../htmls/..."
+    - the scrollable combined HTML + global.css + those same local images at ".../combined_html/...".
+      Each slide inside combined.html still references global.css via its own <link>, so global.css
+      must ship alongside it too, or every slide renders unstyled.
+
+    Before any of that, injects a small JS/SVG chart-rendering script into any slide_*.html that
+    has a data-chart-type element, so the chart is actually visible when viewing the html/combined
+    html directly in a browser (html2pptx.js only ever turned it into a native PPTX chart — the
+    div itself was otherwise empty in plain HTML).
     """
-    from deeppresenter.tools.export import html_slides_to_pptx
-    from deeppresenter.tools.storage import upload_pptx
+    from deeppresenter.tools.export import combine_html_slides, html_slides_to_pptx, inject_chart_rendering
+    from deeppresenter.tools.storage import upload_combined_html, upload_html_files, upload_pptx
 
     slides_dir = result.slides_dir
+    inject_chart_rendering(slides_dir)
     html_files = sorted(Path(slides_dir).glob("slide_*.html"))
 
     pptx_path = Path(slides_dir) / export_filename
@@ -240,6 +263,31 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
         logger.error("[Design] MinIO upload failed: %s", e)
         raise HTTPException(status_code=500, detail=f"MinIO upload failed: {e}")
 
+    css_path = Path(slides_dir) / "global.css"
+    image_extensions = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")
+    image_files = sorted(
+        p for p in Path(slides_dir).iterdir() if p.is_file() and p.suffix.lower() in image_extensions
+    )
+    html_bundle_files = [str(p) for p in html_files] + [str(p) for p in image_files]
+    if css_path.exists():
+        html_bundle_files.append(str(css_path))
+    try:
+        htmls_object_names = upload_html_files(html_bundle_files, emp_no, export_filename)
+    except Exception as e:
+        logger.error("[Design] MinIO htmls upload failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"MinIO htmls upload failed: {e}")
+
+    combined_path = Path(slides_dir) / "combined.html"
+    try:
+        combine_html_slides(slides_dir, str(combined_path))
+        combined_bundle_files = [str(combined_path)] + [str(p) for p in image_files]
+        if css_path.exists():
+            combined_bundle_files.append(str(css_path))
+        combined_object_names = upload_combined_html(combined_bundle_files, emp_no, export_filename)
+    except Exception as e:
+        logger.error("[Design] MinIO combined html upload failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"MinIO combined html upload failed: {e}")
+
     return FileResponse(
         path=str(pptx_path),
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -250,6 +298,8 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
             "X-Slide-Count": str(len(html_files)),
             "X-Turns": str(len(result.messages_log)),
             "X-Minio-Object": object_name,
+            "X-Minio-Htmls-Count": str(len(htmls_object_names)),
+            "X-Minio-Combined-Html-Count": str(len(combined_object_names)),
         },
     )
 
@@ -261,9 +311,12 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
 # ---------------------------------------------------------------------------
 
 async def _run_research_stage_from_paths(config, workspace, session_id: str, md_paths: list[Path],
-                                          num_pages: int, auto_page: bool):
+                                          num_pages: int, auto_page: bool,
+                                          instruction: str = _RESEARCH_DEFAULT_INSTRUCTION,
+                                          config_file: str | Path | None = None):
     """이미 workspace에 저장된 .md 파일 목록 → 슬라이드 원고(ResearchGraphResult) 생성.
-    /research, /template-*-ppt-generation(-db) 이 모두 이 헬퍼를 거쳐간다."""
+    /research, /template-*-ppt-generation(-db) 이 모두 이 헬퍼를 거쳐간다.
+    instruction/config_file을 넘기지 않으면 기존 기본 동작(Research.yaml, 고정 지시문) 그대로다."""
     from deeppresenter.agents.page_planner import decide_num_pages
     from deeppresenter.graph.callbacks import get_langfuse_handler
     from deeppresenter.graph.research_graph import run_research_graph
@@ -276,7 +329,7 @@ async def _run_research_stage_from_paths(config, workspace, session_id: str, md_
         resolved_num_pages = num_pages
 
     req = InputRequest(
-        instruction=_RESEARCH_DEFAULT_INSTRUCTION,
+        instruction=instruction,
         attachments=[str(p) for p in md_paths],
         num_pages=str(resolved_num_pages),
         language=_LANGUAGE,
@@ -295,6 +348,7 @@ async def _run_research_stage_from_paths(config, workspace, session_id: str, md_
             language=_LANGUAGE,
             langfuse_handler=get_langfuse_handler(session_id),
             session_id=session_id,
+            config_file=config_file,
         )
     except Exception as e:
         logger.error("[Research] failed: %s", e)
@@ -448,7 +502,7 @@ async def export_pptx(
     """HTML 슬라이드 폴더(slides_dir) → PPTX 파일 변환 후 다운로드 (16:9 고정).
     soft=True(기본): 검증 경고는 로그로만 출력하고 PPTX 생성 계속.
     soft=False: 검증 오류 발생 시 변환 중단.
-    생성된 PPTX는 MinIO에도 "{emp_no}/slide/{filename}.pptx" 로 업로드된다.
+    생성된 PPTX는 MinIO에도 "{emp_no}/{filename stem}/ppt/{filename stem}.pptx" 로 업로드된다.
     """
     from deeppresenter.tools.export import html_slides_to_pptx
     from deeppresenter.tools.storage import upload_pptx
@@ -498,7 +552,7 @@ async def download_pptx(
     emp_no: str = Form(...),
     export_filename: str = Form(..., description="MinIO에 저장된 파일명 (예: slides.pptx 또는 slides)"),
 ):
-    """MinIO의 '{emp_no}/slide/{export_filename}.pptx' 오브젝트를 조회해 다운로드."""
+    """MinIO의 '{emp_no}/{export_filename stem}/ppt/{export_filename stem}.pptx' 오브젝트를 조회해 다운로드."""
     from starlette.background import BackgroundTask
 
     from deeppresenter.tools.storage import download_pptx as fetch_pptx
@@ -520,12 +574,71 @@ async def download_pptx(
     )
 
 
+@app.post("/download-separated-html", tags=["dev"])
+async def download_separated_html(
+    emp_no: str = Form(...),
+    export_filename: str = Form(..., description="MinIO에 저장된 파일명 (예: slides.pptx 또는 slides)"),
+):
+    """MinIO의 '{emp_no}/{export_filename stem}/htmls/' 아래 개별 슬라이드 html + css 파일을
+    모두 모아 zip으로 묶어 다운로드."""
+    from starlette.background import BackgroundTask
+
+    from deeppresenter.tools.storage import download_html_files
+
+    try:
+        local_path, prefix = download_html_files(emp_no, export_filename)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("[DownloadSeparatedHtml] MinIO download failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"MinIO download failed: {e}")
+
+    zip_filename = f"{Path(prefix.rstrip('/')).name}.zip"
+    return FileResponse(
+        path=local_path,
+        media_type="application/zip",
+        filename=zip_filename,
+        headers={"X-Minio-Prefix": prefix},
+        background=BackgroundTask(lambda: Path(local_path).unlink(missing_ok=True)),
+    )
+
+
+@app.post("/download-combined-html", tags=["dev"])
+async def download_combined_html(
+    emp_no: str = Form(...),
+    export_filename: str = Form(..., description="MinIO에 저장된 파일명 (예: slides.pptx 또는 slides)"),
+):
+    """MinIO의 '{emp_no}/{export_filename stem}/combined_html/' 아래 combined.html + 그 로컬 이미지
+    (예: 하이닉스 커버 로고)를 모두 모아 zip으로 묶어 다운로드 — combined.html이 이미지를 상대경로로
+    참조하므로 이미지 없이 combined.html만 받으면 렌더링이 깨진다."""
+    from starlette.background import BackgroundTask
+
+    from deeppresenter.tools.storage import download_combined_html as fetch_combined_html
+
+    try:
+        local_path, prefix = fetch_combined_html(emp_no, export_filename)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("[DownloadCombinedHtml] MinIO download failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"MinIO download failed: {e}")
+
+    zip_filename = f"{Path(prefix.rstrip('/')).name}.zip"
+    return FileResponse(
+        path=local_path,
+        media_type="application/zip",
+        filename=zip_filename,
+        headers={"X-Minio-Prefix": prefix},
+        background=BackgroundTask(lambda: Path(local_path).unlink(missing_ok=True)),
+    )
+
+
 @app.post("/design-hynix-template", tags=["dev"])
 async def design_hynix_template(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
     export_filename: str = Form(default="slides.pptx"),
-    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
@@ -565,7 +678,7 @@ async def design_free_template(
     file: UploadFile = File(...),
     instruction: str = Form(default="Create a professional presentation."),
     export_filename: str = Form(default="slides.pptx"),
-    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
@@ -609,7 +722,7 @@ async def template_based_ppt_generation(
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
     export_filename: str = Form(default="slides.pptx"),
-    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
@@ -644,7 +757,7 @@ async def template_free_ppt_generation(
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
     export_filename: str = Form(default="slides.pptx"),
-    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
@@ -679,19 +792,21 @@ async def template_based_ppt_generation_db(
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
     export_filename: str = Form(default="slides.pptx"),
-    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
+    additional_instruction: str | None = Form(default=None, description="Research 매뉴스크립트 작성 시 반영할 추가 지시사항 (예: 특정 내용을 강조해달라는 지시)"),
 ):
-    """id 목록 → PostgreSQL sources 테이블에서 raw_text 조회 → '{id}.md' 파일로 저장 →
-    Research 에이전트로 원고 생성 → Design(Hynix 템플릿) 에이전트로 슬라이드 생성,
+    """id 목록 → PostgreSQL sources 테이블에서 title/raw_text 조회 → '{id}.md' 파일로 저장 →
+    Research 에이전트(research-db.yaml)로 여러 소스를 하나의 원고로 합성 →
+    Design(Hynix 템플릿) 에이전트로 슬라이드 생성,
     변환까지 한 요청에서 이어서 처리하고 PPTX를 반환한다."""
     from deeppresenter.tools.db import fetch_raw_texts
-    from deeppresenter.utils.constants import WORKSPACE_BASE
+    from deeppresenter.utils.constants import PACKAGE_DIR, WORKSPACE_BASE
 
     ids = _split_ids(ids)
     if not ids:
@@ -706,16 +821,34 @@ async def template_based_ppt_generation_db(
     workspace.mkdir(parents=True, exist_ok=True)
 
     try:
-        raw_texts = fetch_raw_texts(ids)
+        sources = fetch_raw_texts(ids)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error("[TemplateBasedDB] DB fetch failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Database fetch failed: {e}")
 
-    md_paths = _write_sources_as_markdown(workspace, ids, raw_texts)
+    md_paths = _write_sources_as_markdown(workspace, ids, sources)
 
-    research_result, _ = await _run_research_stage_from_paths(config, workspace, session_id, md_paths, num_pages, auto_page)
+    manifest = "\n".join(
+        f"  {i}. id={sid} title={sources[sid]['title'] or '(untitled)'}"
+        for i, sid in enumerate(ids, start=1)
+    )
+    research_instruction = (
+        f"{_RESEARCH_DEFAULT_INSTRUCTION}\n\n"
+        f"You have been given {len(ids)} independent source document(s) on the same topic:\n"
+        f"{manifest}\n"
+        "Each source's full content is also available as an attachment file, whose content "
+        "starts with an in-file header repeating its id/title."
+    )
+    if additional_instruction:
+        research_instruction += f"\n\nAdditional instructions from the requester:\n{additional_instruction}"
+
+    research_result, _ = await _run_research_stage_from_paths(
+        config, workspace, session_id, md_paths, num_pages, auto_page,
+        instruction=research_instruction,
+        config_file=PACKAGE_DIR / "roles" / "research-db.yaml",
+    )
     design_instruction = f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
     design_result = await _run_design_hynix_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
@@ -730,19 +863,21 @@ async def template_free_ppt_generation_db(
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
     export_filename: str = Form(default="slides.pptx"),
-    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
+    additional_instruction: str | None = Form(default=None, description="Research 매뉴스크립트 작성 시 반영할 추가 지시사항 (예: 특정 내용을 강조해달라는 지시)"),
 ):
-    """id 목록 → PostgreSQL sources 테이블에서 raw_text 조회 → '{id}.md' 파일로 저장 →
-    Research 에이전트로 원고 생성 → Design(자유 템플릿) 에이전트로 슬라이드 생성,
+    """id 목록 → PostgreSQL sources 테이블에서 title/raw_text 조회 → '{id}.md' 파일로 저장 →
+    Research 에이전트(research-db.yaml)로 여러 소스를 하나의 원고로 합성 →
+    Design(자유 템플릿) 에이전트로 슬라이드 생성,
     변환까지 한 요청에서 이어서 처리하고 PPTX를 반환한다."""
     from deeppresenter.tools.db import fetch_raw_texts
-    from deeppresenter.utils.constants import WORKSPACE_BASE
+    from deeppresenter.utils.constants import PACKAGE_DIR, WORKSPACE_BASE
 
     ids = _split_ids(ids)
     if not ids:
@@ -757,16 +892,34 @@ async def template_free_ppt_generation_db(
     workspace.mkdir(parents=True, exist_ok=True)
 
     try:
-        raw_texts = fetch_raw_texts(ids)
+        sources = fetch_raw_texts(ids)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error("[TemplateFreeDB] DB fetch failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Database fetch failed: {e}")
 
-    md_paths = _write_sources_as_markdown(workspace, ids, raw_texts)
+    md_paths = _write_sources_as_markdown(workspace, ids, sources)
 
-    research_result, _ = await _run_research_stage_from_paths(config, workspace, session_id, md_paths, num_pages, auto_page)
+    manifest = "\n".join(
+        f"  {i}. id={sid} title={sources[sid]['title'] or '(untitled)'}"
+        for i, sid in enumerate(ids, start=1)
+    )
+    research_instruction = (
+        f"{_RESEARCH_DEFAULT_INSTRUCTION}\n\n"
+        f"You have been given {len(ids)} independent source document(s) on the same topic:\n"
+        f"{manifest}\n"
+        "Each source's full content is also available as an attachment file, whose content "
+        "starts with an in-file header repeating its id/title."
+    )
+    if additional_instruction:
+        research_instruction += f"\n\nAdditional instructions from the requester:\n{additional_instruction}"
+
+    research_result, _ = await _run_research_stage_from_paths(
+        config, workspace, session_id, md_paths, num_pages, auto_page,
+        instruction=research_instruction,
+        config_file=PACKAGE_DIR / "roles" / "research-db.yaml",
+    )
     design_instruction = f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
     design_result = await _run_design_free_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
