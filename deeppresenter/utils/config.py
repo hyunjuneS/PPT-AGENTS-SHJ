@@ -106,7 +106,7 @@ class LLM(BaseModel):
 
             except Exception as e:
                 errors.append(str(e))
-                logging_openai_exceptions(self.model, e)
+                logging_openai_exceptions(f"{self.model} @ {self.base_url}", e)
                 if attempt < retry_times - 1:
                     await asyncio.sleep(min(2 ** attempt, 30))
 

@@ -161,6 +161,17 @@ class timer:
 
 
 def logging_openai_exceptions(identifier: Any, exc: Exception) -> str:
-    msg = f"Exception [{type(exc).__name__}]: {str(exc)}\n{traceback.format_exc()}"
+    # openai.APIError subclasses (NotFoundError, RateLimitError, ...) carry the actual
+    # outgoing httpx.Request — pulling the URL/status/body straight from the exception
+    # means the exact failing endpoint shows up right next to the model/base_url that
+    # made the call, no need to cross-reference a separate httpx INFO log line for it.
+    request = getattr(exc, "request", None)
+    url = getattr(request, "url", None)
+    status_code = getattr(exc, "status_code", None)
+    body = getattr(exc, "body", None)
+    detail = "".join(
+        f" {k}={v}" for k, v in (("url", url), ("status", status_code), ("body", body)) if v is not None
+    )
+    msg = f"Exception [{type(exc).__name__}]:{detail} {str(exc)}\n{traceback.format_exc()}"
     warning(f"{identifier} → {msg}")
     return msg

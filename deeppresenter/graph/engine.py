@@ -126,6 +126,8 @@ def build_graph(
     tool_node = ToolNode(list(tools), handle_tool_errors=True)
     model_with_tools = chat_model.bind_tools(list(tools))
     model_name = getattr(chat_model, "model_name", None) or getattr(chat_model, "model", "unknown")
+    base_url = getattr(chat_model, "openai_api_base", None) or getattr(chat_model, "base_url", None)
+    model_name = f"{model_name} @ {base_url}" if base_url else model_name
     start_time = time.time()
 
     async def agent_node(state: GraphState) -> dict:
