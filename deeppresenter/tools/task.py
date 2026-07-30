@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from deeppresenter.utils.constants import HEAVY_REFLECT, TOOL_CUTOFF_LEN
@@ -392,6 +393,111 @@ INSPECT_MANUSCRIPT_SPEC = {
 }
 
 
+# ── inspect_content ───────────────────────────────────────────────────────────
+
+# A term/number is "distinctive" if it's a number (data point) or a word long
+# enough to not be a common filler word — used as a cheap proxy for "did this
+# fact from the source make it into the manuscript" without an extra LLM call.
+_NUMBER_RE = re.compile(r"\b\d[\d,.]*%?\b")
+_WORD_RE = re.compile(r"[A-Za-z가-힣]{4,}")
+
+
+def _distinctive_terms(text: str) -> set[str]:
+    return {m.lower() for m in _NUMBER_RE.findall(text)} | {m.lower() for m in _WORD_RE.findall(text)}
+
+
+def inspect_content(path: str, sources_dir: str | None = None) -> str:
+    """
+    Check a Markdown manuscript for content-quality issues that inspect_manuscript
+    (page count/size only) does not catch:
+    - Balance: flags pages far thinner/denser than the manuscript's average.
+    - Duplication: flags page pairs whose text is highly similar.
+    - Omission: flags source documents (in sources_dir) whose distinctive terms/numbers
+      barely show up anywhere in the manuscript.
+    """
+    p = Path(path)
+    assert p.exists() and p.suffix == ".md", f"Not a valid .md file: {path}"
+    content = p.read_text(encoding="utf-8")
+    assert content.strip(), "Manuscript is empty"
+
+    pages = [s.strip() for s in content.split("---") if s.strip()]
+    assert pages, "Manuscript has no pages (no non-empty '---' separated sections)"
+
+    issues: list[str] = []
+
+    # Balance — skip the cover (first) and closing (last) page: those are expected
+    # to be short/title-only by design (see Research.yaml), not a content gap.
+    word_counts = [len(page.split()) for page in pages]
+    body_counts = word_counts[1:-1] if len(word_counts) > 2 else []
+    if body_counts:
+        avg_words = sum(body_counts) / len(body_counts)
+        for i, wc in enumerate(word_counts[1:-1], start=2):
+            if wc < avg_words * 0.25:
+                issues.append(f"Page {i} looks too thin ({wc} words vs. average {avg_words:.0f}).")
+            elif wc > avg_words * 2.5:
+                issues.append(f"Page {i} looks overloaded ({wc} words vs. average {avg_words:.0f}).")
+    else:
+        avg_words = sum(word_counts) / len(word_counts)
+
+    # Duplication
+    SIM_THRESHOLD = 0.6
+    for i in range(len(pages)):
+        for j in range(i + 1, len(pages)):
+            ratio = SequenceMatcher(None, pages[i], pages[j]).ratio()
+            if ratio >= SIM_THRESHOLD:
+                issues.append(f"Page {i + 1} and page {j + 1} look like duplicated content ({ratio:.0%} similar).")
+
+    # Omission — compare against source documents, if any are available
+    src_dir = Path(sources_dir) if sources_dir else p.parent / "sources"
+    if src_dir.is_dir():
+        manuscript_terms = _distinctive_terms(content)
+        for src_file in sorted(src_dir.glob("*.md")):
+            source_terms = _distinctive_terms(src_file.read_text(encoding="utf-8"))
+            if not source_terms:
+                continue
+            coverage = len(source_terms & manuscript_terms) / len(source_terms)
+            if coverage < 0.3:
+                issues.append(
+                    f"Source '{src_file.name}' has low coverage in the manuscript "
+                    f"({coverage:.0%} of its key terms/numbers appear) — content from it may be missing."
+                )
+
+    if issues:
+        return "Issues found:\n" + "\n".join(f"- {i}" for i in issues)
+    return (
+        f"Content looks good: {len(pages)} page(s), avg {avg_words:.0f} words/page, "
+        "no duplication or omission detected."
+    )
+
+
+INSPECT_CONTENT_SPEC = {
+    "type": "function",
+    "function": {
+        "name": "inspect_content",
+        "description": (
+            "Check manuscript content quality beyond page count/size: whether content is "
+            "evenly distributed across pages, whether any pages duplicate each other, and "
+            "whether any source document's key content is missing from the manuscript. "
+            "Call this after inspect_manuscript, before finalize."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path to the .md manuscript file."},
+                "sources_dir": {
+                    "type": "string",
+                    "description": (
+                        "Absolute path to the directory of source .md files to check coverage against. "
+                        "Defaults to a 'sources' folder next to the manuscript."
+                    ),
+                },
+            },
+            "required": ["path"],
+        },
+    },
+}
+
+
 # ── inspect_slide ─────────────────────────────────────────────────────────────
 
 async def inspect_slide(
@@ -656,5 +762,6 @@ ALL_TOOLS: dict[str, tuple[dict, object]] = {
     "list_directory":     (LIST_DIRECTORY_SPEC,     list_directory),
     "execute_command":    (EXECUTE_COMMAND_SPEC,    execute_command),
     "inspect_manuscript": (INSPECT_MANUSCRIPT_SPEC, inspect_manuscript),
+    "inspect_content":    (INSPECT_CONTENT_SPEC,    inspect_content),
     "inspect_slide":      (INSPECT_SLIDE_SPEC,      inspect_slide),
 }

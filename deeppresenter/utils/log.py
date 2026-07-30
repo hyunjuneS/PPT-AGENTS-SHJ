@@ -35,7 +35,7 @@ _MAGENTA = "\033[35m"
 _AGENT_ICON = {"Research": "🔬", "Design": "🎨", "Planner": "📋"}
 _TOOL_ICON = {
     "write_file": "✍ ", "read_file": "📖", "inspect_slide": "🔍",
-    "inspect_manuscript": "🔍", "execute_command": "⚡", "finalize": "🏁",
+    "inspect_manuscript": "🔍", "inspect_content": "🔍", "execute_command": "⚡", "finalize": "🏁",
     "web_search": "🌐", "web_fetch": "🌐",
 }
 
