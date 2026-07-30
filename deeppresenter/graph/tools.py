@@ -10,7 +10,7 @@ from typing import Any, Callable, Literal
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, create_model
 
-from deeppresenter.tools.task import ALL_TOOLS
+from deeppresenter.tools.task import ALL_TOOLS, InspectContentLimiter
 from deeppresenter.utils.toolset import resolve_toolset
 from deeppresenter.utils.typings import RoleConfig
 
@@ -81,7 +81,9 @@ def build_tools_for_role(
 
     llm, if given, is bound onto inspect_content the same way — so its content
     review runs on the exact same model/base_url/api_key the calling role's own
-    chat_model uses, not a separately-configured one."""
+    chat_model uses, not a separately-configured one. inspect_content also always
+    gets a fresh InspectContentLimiter bound here (one per build_tools_for_role
+    call, i.e. per agent run) so it can't be called an unbounded number of times."""
     specs = resolve_toolset(role_config.toolset, tools_dict, server_tools)
 
     structured_tools: list[StructuredTool] = []
@@ -91,8 +93,11 @@ def build_tools_for_role(
         func: Callable = raw_func
         if name == "finalize" and finalize_overrides:
             func = _bind_kwargs(raw_func, **finalize_overrides)
-        elif name == "inspect_content" and llm is not None:
-            func = _bind_kwargs(raw_func, llm=llm)
+        elif name == "inspect_content":
+            overrides: dict[str, Any] = {"limiter": InspectContentLimiter()}
+            if llm is not None:
+                overrides["llm"] = llm
+            func = _bind_kwargs(raw_func, **overrides)
 
         args_model = _build_args_model(spec, raw_func)
         kwargs: dict[str, Any] = dict(

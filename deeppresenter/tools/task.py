@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from deeppresenter.utils.constants import HEAVY_REFLECT, TOOL_CUTOFF_LEN
+from deeppresenter.utils.constants import HEAVY_REFLECT, INSPECT_CONTENT_MAX_CALLS, TOOL_CUTOFF_LEN
 from deeppresenter.utils.log import debug, warning
 
 _SCREENSHOT_JS = Path(__file__).resolve().parents[1] / "html2pptx" / "screenshot.js"
@@ -441,13 +441,40 @@ def _truncate(text: str, max_chars: int) -> str:
     return text[:max_chars] + f"\n... (truncated, original length {len(text)} characters)"
 
 
-async def inspect_content(path: str, sources_dir: str | None = None, llm=None) -> str:
+class InspectContentLimiter:
+    """Caps how many times inspect_content will actually run its LLM review within
+    a single agent run — each call is a real LLM request, and nothing in the ReAct
+    loop otherwise stops the agent from calling it forever on a "keep checking until
+    it's clean" instruction. One instance is created per agent run (see
+    build_tools_for_role in deeppresenter/graph/tools.py) and bound onto the tool,
+    so the count is per-run, not global/shared across concurrent requests."""
+
+    def __init__(self, max_calls: int = INSPECT_CONTENT_MAX_CALLS):
+        self.max_calls = max_calls
+        self.count = 0
+
+
+async def inspect_content(
+    path: str,
+    sources_dir: str | None = None,
+    llm=None,
+    limiter: InspectContentLimiter | None = None,
+) -> str:
     """
     LLM-based content-quality review of a Markdown manuscript that inspect_manuscript
     (page count/size only) does not catch: whether content is evenly distributed across
     pages, whether any pages duplicate each other, and whether any source document's
     content is missing from the manuscript.
     """
+    if limiter is not None:
+        if limiter.count >= limiter.max_calls:
+            return (
+                f"inspect_content has already been called {limiter.count} time(s) — "
+                f"the maximum ({limiter.max_calls}) for this run. Do not call it again. "
+                "Use your best judgment on any remaining issues, then call finalize."
+            )
+        limiter.count += 1
+
     p = Path(path)
     assert p.exists() and p.suffix == ".md", f"Not a valid .md file: {path}"
     content = p.read_text(encoding="utf-8")
@@ -496,7 +523,10 @@ INSPECT_CONTENT_SPEC = {
             "Check manuscript content quality beyond page count/size: whether content is "
             "evenly distributed across pages, whether any pages duplicate each other, and "
             "whether any source document's key content is missing from the manuscript. "
-            "Call this after inspect_manuscript, before finalize."
+            "Call this after inspect_manuscript, before finalize. "
+            f"Can be called at most {INSPECT_CONTENT_MAX_CALLS} times per run — budget your "
+            "manuscript revisions accordingly, and finalize with your best judgment once "
+            "the limit is reached even if minor issues remain."
         ),
         "parameters": {
             "type": "object",

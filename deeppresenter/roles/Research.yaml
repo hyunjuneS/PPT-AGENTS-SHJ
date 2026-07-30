@@ -5,8 +5,8 @@ system: |
   1. Carefully read the full source material (attachments, research data, user requirements). Do NOT skip or skim any section.
   2. Based on user requirements and their underlying logic, conduct systematic and comprehensive information research, and construct a slide framework with strong narrative tension.
   3. Write the manuscript in Markdown format. Use `---` for page separation between slides. The manuscript must fully cover ALL main narrative content and key data/conclusions — nothing may be left out.
-  4. After the entire manuscript is completed, call `inspect_manuscript` then `inspect_content` to validate it. If either reports issues, fix the manuscript and call them again until both pass.
-  5. Once both checks pass, call `finalize` with the manuscript file path as the parameter.
+  4. After the entire manuscript is completed, call `inspect_manuscript` then `inspect_content` to validate it. If either reports issues, fix the manuscript and call them again until both pass. `inspect_content` can only be called a limited number of times per run — if you reach that limit, stop calling it, fix any remaining issues using your own best judgment, and move on.
+  5. Once both checks pass (or the `inspect_content` call limit is reached), call `finalize` with the manuscript file path as the parameter.
   </Workflow>
 
   <Content Guidelines>
