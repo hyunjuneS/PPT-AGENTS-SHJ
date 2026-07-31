@@ -34,6 +34,8 @@ from deeppresenter.utils.typings import InputRequest, RoleConfig
 
 _HYNIX_TEMPLATE_DIR = str(PACKAGE_DIR / "roles" / "templates" / "hynix")
 _HYNIX_LOGO_FILENAME = "ppt-main_logo.png"
+_HYNIX_SECRET_LABEL_FILENAME = "ppt-secret-label.png"
+_HYNIX_TEMPLATE_ASSETS = (_HYNIX_LOGO_FILENAME, _HYNIX_SECRET_LABEL_FILENAME)
 _RECURSION_LIMIT = 500  # old engine had no hard turn cap for Design; generous headroom here
 
 _LANG_INSTRUCTION = {
@@ -149,11 +151,14 @@ async def run_design_graph(
 
     if "template_dir" in role_config.instruction:
         # cover-page.html(등 하이닉스 템플릿)이 배경 이미지 등에서 상대경로로 참조할 수 있도록,
-        # 슬라이드가 실제로 저장되는 slides/ 안에도 로고를 넣어준다 — 원본 template_dir 기준
-        # 상대경로는 slides/에 복사된 slide_01.html 입장에선 해석되지 않는다.
-        logo_src = Path(_HYNIX_TEMPLATE_DIR) / _HYNIX_LOGO_FILENAME
-        if logo_src.exists():
-            shutil.copy(logo_src, workspace / "slides" / _HYNIX_LOGO_FILENAME)
+        # 슬라이드가 실제로 저장되는 slides/ 안에도 로고/라벨 이미지를 넣어준다 — 원본 template_dir 기준
+        # 상대경로는 slides/에 복사된 slide_01.html 입장에선 해석되지 않는다. main-ui.py의 MinIO
+        # 업로드(htmls/combined_html)는 slides/ 안의 이미지 파일을 확장자로 스캔해서 통째로 올리므로,
+        # 여기 복사되는 것만으로 그쪽도 자동으로 같이 업로드된다.
+        for asset_name in _HYNIX_TEMPLATE_ASSETS:
+            asset_src = Path(_HYNIX_TEMPLATE_DIR) / asset_name
+            if asset_src.exists():
+                shutil.copy(asset_src, workspace / "slides" / asset_name)
 
     llm = config[role_config.use_model]
     chat_model = to_chat_openai(llm)
