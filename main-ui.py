@@ -151,6 +151,18 @@ def _cover_info_block(presenter_name: str, emp_no: str, team_name: str) -> str:
     )
 
 
+def _reference_info_block(reference_file_name: str) -> str:
+    """Design 에이전트 instruction에 덧붙여 references 슬라이드(마지막 장 바로 앞에 추가되는 한 장)에
+    표시할 출처 파일명 자리를 채우는 지시문. 실제 값은 항상 여기서 명시적으로 넘기고, 에이전트가
+    sources/ 폴더 등을 스스로 뒤져서 알아내게 하지 않는다."""
+    return (
+        "The deck must include one additional references slide, placed immediately before "
+        "the closing/last slide, listing the source document reference(s) below. Use this "
+        "exact value — do not look it up yourself, derive it from other files, or invent your own:\n"
+        f"- Reference(s): {reference_file_name}"
+    )
+
+
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_\-.]+$")
 
 
@@ -641,6 +653,7 @@ async def design_hynix_template(
     emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
+    reference_file_name: str = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
@@ -667,7 +680,10 @@ async def design_hynix_template(
     tiered_llm = _resolve_tiered_llm(model_size, additional_request, base_url)
     config = _make_deep_config(design_llm=tiered_llm)
 
-    full_instruction = f"{instruction}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
+    full_instruction = (
+        f"{instruction}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
+        f"\n\n{_reference_info_block(reference_file_name)}"
+    )
     result = await _run_design_hynix_stage(config, workspace, session_id, str(manuscript_path), full_instruction)
 
     return await _design_response(result, session_id, export_filename, emp_no)
@@ -681,6 +697,7 @@ async def design_free_template(
     emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
+    reference_file_name: str = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
@@ -710,7 +727,10 @@ async def design_free_template(
     tiered_llm = _resolve_tiered_llm(model_size, additional_request, base_url)
     config = _make_deep_config(design_llm=tiered_llm)
 
-    full_instruction = f"{instruction}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
+    full_instruction = (
+        f"{instruction}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
+        f"\n\n{_reference_info_block(reference_file_name)}"
+    )
     result = await _run_design_free_stage(config, workspace, session_id, str(manuscript_path), full_instruction)
 
     return await _design_response(result, session_id, export_filename, emp_no)
@@ -725,6 +745,7 @@ async def template_based_ppt_generation(
     emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
+    reference_file_name: str = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
@@ -743,7 +764,10 @@ async def template_based_ppt_generation(
     workspace.mkdir(parents=True, exist_ok=True)
 
     research_result, _ = await _run_research_stage(config, workspace, session_id, file, num_pages, auto_page)
-    design_instruction = f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
+    design_instruction = (
+        f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
+        f"\n\n{_reference_info_block(reference_file_name)}"
+    )
     design_result = await _run_design_hynix_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
     )
@@ -760,6 +784,7 @@ async def template_free_ppt_generation(
     emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
+    reference_file_name: str = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
@@ -778,7 +803,10 @@ async def template_free_ppt_generation(
     workspace.mkdir(parents=True, exist_ok=True)
 
     research_result, _ = await _run_research_stage(config, workspace, session_id, file, num_pages, auto_page)
-    design_instruction = f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
+    design_instruction = (
+        f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
+        f"\n\n{_reference_info_block(reference_file_name)}"
+    )
     design_result = await _run_design_free_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
     )
@@ -795,6 +823,7 @@ async def template_based_ppt_generation_db(
     emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
+    reference_file_name: str = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
@@ -849,7 +878,10 @@ async def template_based_ppt_generation_db(
         instruction=research_instruction,
         config_file=PACKAGE_DIR / "roles" / "research-db.yaml",
     )
-    design_instruction = f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
+    design_instruction = (
+        f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
+        f"\n\n{_reference_info_block(reference_file_name)}"
+    )
     design_result = await _run_design_hynix_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
     )
@@ -866,6 +898,7 @@ async def template_free_ppt_generation_db(
     emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
+    reference_file_name: str = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
@@ -920,7 +953,10 @@ async def template_free_ppt_generation_db(
         instruction=research_instruction,
         config_file=PACKAGE_DIR / "roles" / "research-db.yaml",
     )
-    design_instruction = f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
+    design_instruction = (
+        f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
+        f"\n\n{_reference_info_block(reference_file_name)}"
+    )
     design_result = await _run_design_free_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
     )
