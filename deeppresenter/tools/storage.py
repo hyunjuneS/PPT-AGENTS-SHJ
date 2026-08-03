@@ -5,6 +5,7 @@
   - ppt/            : PPTX 파일 1개
   - htmls/          : 슬라이드 html N개 + global.css + 로컬 이미지 (개별 파일)
   - combined_html/  : 합쳐진 스크롤 html + 그 로컬 이미지 (개별 파일)
+  - history/        : .history/ 안의 {agent}-history.json / {agent}-config.json (실행 성공/실패 무관하게 업로드됨)
 """
 
 import logging
@@ -149,6 +150,34 @@ def upload_combined_html(local_files: list[str], emp_no: str, export_filename: s
     스타일을 가져오고 이미지도 상대경로 그대로이므로, global.css와 이미지들이 combined.html과
     같은 폴더에 함께 있어야 정상적으로 렌더링된다. 반환값은 업로드된 오브젝트 이름 목록."""
     return _upload_files_under_prefix(local_files, emp_no, export_filename, category="combined_html")
+
+
+def upload_history_files(local_files: list[str], emp_no: str, export_filename: str) -> list[str]:
+    """.history/ 안의 {agent}-history.json / {agent}-config.json 을 MinIO에
+    '{emp_no}/{export_filename stem}/history/{원본 파일명}' 으로 업로드.
+
+    ppt/htmls/combined_html과 달리 한 번의 요청 안에서도 여러 번 불릴 수 있다 (Research 단계가
+    끝나자마자 한 번, 이어지는 Design 단계가 끝난 뒤 다시 한 번 — 혹은 어느 한쪽이 실패해도 그
+    시점까지의 내용으로 한 번) — 그때마다 최신 상태를 반영해야 하는 디버깅용 아티팩트이므로,
+    다른 카테고리처럼 '_(1)', '_(2)' 버전 폴더를 만들지 않고 같은 경로에 그대로 덮어쓴다.
+    """
+    if not local_files:
+        return []
+
+    bucket = os.environ["MINIO_FILE_BUCKET"]
+    client = _get_client()
+    if not client.bucket_exists(bucket):
+        client.make_bucket(bucket)
+
+    stem = _filename_stem(export_filename)
+    object_names = []
+    for f in (Path(p) for p in local_files):
+        object_name = f"{emp_no}/{stem}/history/{f.name}"
+        client.fput_object(bucket, object_name, str(f), content_type=_content_type_for(f))
+        object_names.append(object_name)
+
+    logger.info("[MinIO] uploaded %d history file(s) -> %s/%s/%s/history/", len(object_names), bucket, emp_no, stem)
+    return object_names
 
 
 def download_pptx(emp_no: str, export_filename: str) -> tuple[str, str]:

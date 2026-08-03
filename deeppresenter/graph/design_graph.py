@@ -29,7 +29,7 @@ from deeppresenter.utils.constants import (
     OFFLINE_PROMPT,
     PACKAGE_DIR,
 )
-from deeppresenter.utils.log import show_agent_start
+from deeppresenter.utils.log import show_agent_start, warning
 from deeppresenter.utils.typings import InputRequest, RoleConfig
 
 _HYNIX_TEMPLATE_DIR = str(PACKAGE_DIR / "roles" / "templates" / "hynix")
@@ -133,6 +133,49 @@ def _save_history(
         )
 
 
+def _extract_messages_log_and_cost(messages: list[BaseMessage]) -> tuple[list[dict], dict]:
+    """Turns accumulated graph messages into the (messages_log, cost) pair both _save_history
+    and DesignGraphResult need. Pulled out of run_design_graph's body so it can be computed from
+    whatever state is available — including a partial one left behind by a mid-run failure, not
+    just a successful final_state."""
+    messages_log: list[dict] = []
+    prompt_tokens = completion_tokens = total_tokens = 0
+    for m in messages:
+        if isinstance(m, AIMessage):
+            messages_log.append({"role": "assistant", "text": _message_preview(m.content)})
+            usage = getattr(m, "usage_metadata", None)
+            if usage:
+                prompt_tokens += usage.get("input_tokens", 0) or 0
+                completion_tokens += usage.get("output_tokens", 0) or 0
+                total_tokens += usage.get("total_tokens", 0) or 0
+        elif isinstance(m, ToolMessage):
+            messages_log.append({"role": "tool", "text": _message_preview(m.content)})
+    cost = {"prompt": prompt_tokens, "completion": completion_tokens, "total": total_tokens}
+    return messages_log, cost
+
+
+def _upload_history_best_effort(workspace: Path, emp_no: str | None, export_filename: str | None) -> None:
+    """Uploads whatever is currently in .history/ to MinIO, right after _save_history writes it —
+    so a debugging trail exists there even for a run that fails before _design_response's own
+    MinIO uploads ever run. By the time Design's own history is saved here, a combined endpoint's
+    workspace/.history/ already also has Research-history.json/-config.json in it (same workspace,
+    Research ran first), so this one upload covers both stages' artifacts together. Silently no-ops
+    without emp_no/export_filename. A MinIO failure here is logged, not raised — it must never mask
+    the actual run's real success/failure."""
+    if not emp_no or not export_filename:
+        return
+    hist_dir = workspace / ".history"
+    local_files = [str(p) for p in sorted(hist_dir.glob("*.json"))]
+    if not local_files:
+        return
+    from deeppresenter.tools.storage import upload_history_files
+
+    try:
+        upload_history_files(local_files, emp_no, export_filename)
+    except Exception as e:
+        warning(f"[Design] MinIO history upload failed: {e}")
+
+
 async def run_design_graph(
     config: DeepPresenterConfig,
     workspace: Path,
@@ -143,6 +186,8 @@ async def run_design_graph(
     language: str = "en",
     langfuse_handler=None,
     session_id: str | None = None,
+    emp_no: str | None = None,
+    export_filename: str | None = None,
 ) -> DesignGraphResult:
     workspace.mkdir(parents=True, exist_ok=True)
     (workspace / "slides").mkdir(exist_ok=True)
@@ -207,30 +252,25 @@ async def run_design_graph(
             if session_id:
                 run_config["metadata"] = {"langfuse_session_id": session_id}
 
-        final_state = await graph.ainvoke(initial_state, config=run_config)
+        # Stream instead of a single ainvoke() so the latest state snapshot survives a mid-run
+        # failure — ainvoke() only ever returns on success, so an exception raised partway
+        # through (max turns, context window, exhausted LLM retries, ...) would otherwise leave
+        # nothing behind to save to .history/ at all.
+        final_state = dict(initial_state)
+        try:
+            async for state in graph.astream(initial_state, config=run_config, stream_mode="values"):
+                final_state = state
+        finally:
+            messages_log, cost = _extract_messages_log_and_cost(final_state.get("messages", []))
+            _save_history(
+                workspace, "Design", final_state.get("messages", []),
+                llm.model_name, cost["total"], cost, tool_names,
+            )
+            _upload_history_best_effort(workspace, emp_no, export_filename)
 
     slides_dir = final_state.get("final_outcome")
     if not slides_dir:
         raise RuntimeError("Design agent did not call finalize with a confirmed outcome.")
-
-    messages_log: list[dict] = []
-    prompt_tokens = completion_tokens = total_tokens = 0
-    for m in final_state["messages"]:
-        if isinstance(m, AIMessage):
-            messages_log.append({"role": "assistant", "text": _message_preview(m.content)})
-            usage = getattr(m, "usage_metadata", None)
-            if usage:
-                prompt_tokens += usage.get("input_tokens", 0) or 0
-                completion_tokens += usage.get("output_tokens", 0) or 0
-                total_tokens += usage.get("total_tokens", 0) or 0
-        elif isinstance(m, ToolMessage):
-            messages_log.append({"role": "tool", "text": _message_preview(m.content)})
-
-    cost = {"prompt": prompt_tokens, "completion": completion_tokens, "total": total_tokens}
-
-    _save_history(
-        workspace, "Design", final_state["messages"], llm.model_name, total_tokens, cost, tool_names
-    )
 
     return DesignGraphResult(
         slides_dir=slides_dir,
