@@ -327,8 +327,7 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
 async def _run_research_stage_from_paths(config, workspace, session_id: str, md_paths: list[Path],
                                           num_pages: int, auto_page: bool,
                                           instruction: str = _RESEARCH_DEFAULT_INSTRUCTION,
-                                          config_file: str | Path | None = None,
-                                          emp_no: str | None = None, export_filename: str | None = None):
+                                          config_file: str | Path | None = None):
     """이미 workspace에 저장된 .md 파일 목록 → 슬라이드 원고(ResearchGraphResult) 생성.
     /research, /template-*-ppt-generation(-db) 이 모두 이 헬퍼를 거쳐간다.
     instruction/config_file을 넘기지 않으면 기존 기본 동작(Research.yaml, 고정 지시문) 그대로다."""
@@ -364,8 +363,6 @@ async def _run_research_stage_from_paths(config, workspace, session_id: str, md_
             langfuse_handler=get_langfuse_handler(session_id),
             session_id=session_id,
             config_file=config_file,
-            emp_no=emp_no,
-            export_filename=export_filename,
         )
     except Exception as e:
         logger.error("[Research] failed: %s", e)
@@ -375,8 +372,7 @@ async def _run_research_stage_from_paths(config, workspace, session_id: str, md_
 
 
 async def _run_research_stage(config, workspace, session_id: str, file: UploadFile,
-                               num_pages: int, auto_page: bool,
-                               emp_no: str | None = None, export_filename: str | None = None):
+                               num_pages: int, auto_page: bool):
     """업로드된 .md → 슬라이드 원고(ResearchGraphResult) 생성."""
     if not file.filename or not file.filename.lower().endswith(".md"):
         raise HTTPException(status_code=400, detail="Only .md files are accepted.")
@@ -390,14 +386,10 @@ async def _run_research_stage(config, workspace, session_id: str, file: UploadFi
     attachment_path = workspace / file.filename
     attachment_path.write_bytes(raw)
 
-    return await _run_research_stage_from_paths(
-        config, workspace, session_id, [attachment_path], num_pages, auto_page,
-        emp_no=emp_no, export_filename=export_filename,
-    )
+    return await _run_research_stage_from_paths(config, workspace, session_id, [attachment_path], num_pages, auto_page)
 
 
-async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_file: str, instruction: str,
-                                   emp_no: str | None = None, export_filename: str | None = None):
+async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_file: str, instruction: str):
     """원고(.md) → Design 에이전트(Hynix 템플릿)로 HTML 슬라이드 생성."""
     from deeppresenter.graph.callbacks import get_langfuse_handler
     from deeppresenter.graph.design_graph import run_design_graph
@@ -428,16 +420,13 @@ async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_f
             language=_LANGUAGE,
             langfuse_handler=get_langfuse_handler(session_id),
             session_id=session_id,
-            emp_no=emp_no,
-            export_filename=export_filename,
         )
     except Exception as e:
         logger.error("[DesignHynixTemplate] failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Design agent failed: {e}")
 
 
-async def _run_design_free_stage(config, workspace, session_id: str, markdown_file: str, instruction: str,
-                                  emp_no: str | None = None, export_filename: str | None = None):
+async def _run_design_free_stage(config, workspace, session_id: str, markdown_file: str, instruction: str):
     """원고(.md) → Design 에이전트(자유 템플릿)로 HTML 슬라이드 생성."""
     from deeppresenter.graph.callbacks import get_langfuse_handler
     from deeppresenter.graph.design_graph import run_design_graph
@@ -461,8 +450,6 @@ async def _run_design_free_stage(config, workspace, session_id: str, markdown_fi
             language=_LANGUAGE,
             langfuse_handler=get_langfuse_handler(session_id),
             session_id=session_id,
-            emp_no=emp_no,
-            export_filename=export_filename,
         )
     except Exception as e:
         logger.error("[DesignFreeTemplate] failed: %s", e)
@@ -699,10 +686,7 @@ async def design_hynix_template(
         f"{instruction}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
         f"\n\n{_reference_info_block(reference_file_name)}"
     )
-    result = await _run_design_hynix_stage(
-        config, workspace, session_id, str(manuscript_path), full_instruction,
-        emp_no=emp_no, export_filename=export_filename,
-    )
+    result = await _run_design_hynix_stage(config, workspace, session_id, str(manuscript_path), full_instruction)
 
     return await _design_response(result, session_id, export_filename, emp_no)
 
@@ -749,10 +733,7 @@ async def design_free_template(
         f"{instruction}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
         f"\n\n{_reference_info_block(reference_file_name)}"
     )
-    result = await _run_design_free_stage(
-        config, workspace, session_id, str(manuscript_path), full_instruction,
-        emp_no=emp_no, export_filename=export_filename,
-    )
+    result = await _run_design_free_stage(config, workspace, session_id, str(manuscript_path), full_instruction)
 
     return await _design_response(result, session_id, export_filename, emp_no)
 
@@ -784,17 +765,13 @@ async def template_based_ppt_generation(
     workspace = WORKSPACE_BASE / session_id
     workspace.mkdir(parents=True, exist_ok=True)
 
-    research_result, _ = await _run_research_stage(
-        config, workspace, session_id, file, num_pages, auto_page,
-        emp_no=emp_no, export_filename=export_filename,
-    )
+    research_result, _ = await _run_research_stage(config, workspace, session_id, file, num_pages, auto_page)
     design_instruction = (
         f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
         f"\n\n{_reference_info_block(reference_file_name)}"
     )
     design_result = await _run_design_hynix_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
-        emp_no=emp_no, export_filename=export_filename,
     )
 
     return await _design_response(design_result, session_id, export_filename, emp_no)
@@ -827,17 +804,13 @@ async def template_free_ppt_generation(
     workspace = WORKSPACE_BASE / session_id
     workspace.mkdir(parents=True, exist_ok=True)
 
-    research_result, _ = await _run_research_stage(
-        config, workspace, session_id, file, num_pages, auto_page,
-        emp_no=emp_no, export_filename=export_filename,
-    )
+    research_result, _ = await _run_research_stage(config, workspace, session_id, file, num_pages, auto_page)
     design_instruction = (
         f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
         f"\n\n{_reference_info_block(reference_file_name)}"
     )
     design_result = await _run_design_free_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
-        emp_no=emp_no, export_filename=export_filename,
     )
 
     return await _design_response(design_result, session_id, export_filename, emp_no)
@@ -906,7 +879,6 @@ async def template_based_ppt_generation_db(
         config, workspace, session_id, md_paths, num_pages, auto_page,
         instruction=research_instruction,
         config_file=PACKAGE_DIR / "roles" / "research-db.yaml",
-        emp_no=emp_no, export_filename=export_filename,
     )
     design_instruction = (
         f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
@@ -914,7 +886,6 @@ async def template_based_ppt_generation_db(
     )
     design_result = await _run_design_hynix_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
-        emp_no=emp_no, export_filename=export_filename,
     )
 
     return await _design_response(design_result, session_id, export_filename, emp_no)
@@ -983,7 +954,6 @@ async def template_free_ppt_generation_db(
         config, workspace, session_id, md_paths, num_pages, auto_page,
         instruction=research_instruction,
         config_file=PACKAGE_DIR / "roles" / "research-db.yaml",
-        emp_no=emp_no, export_filename=export_filename,
     )
     design_instruction = (
         f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
@@ -991,7 +961,6 @@ async def template_free_ppt_generation_db(
     )
     design_result = await _run_design_free_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
-        emp_no=emp_no, export_filename=export_filename,
     )
 
     return await _design_response(design_result, session_id, export_filename, emp_no)
