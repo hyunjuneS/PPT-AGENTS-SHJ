@@ -151,28 +151,30 @@ def _cover_info_block(presenter_name: str, emp_no: str, team_name: str) -> str:
     )
 
 
-def _reference_info_block(reference_file_name: str) -> str:
+def _split_csv_list(items: list[str]) -> list[str]:
+    """list[str]=Form(...)로 여러 필드를 제대로 보낸 경우와, Swagger UI 등 일부 클라이언트가
+    'a,b' 처럼 한 필드에 콤마로 이어붙여 보내는 경우를 모두 지원하도록 각 원소를 콤마로 추가 분리."""
+    result = []
+    for raw in items:
+        result.extend(part.strip() for part in raw.split(",") if part.strip())
+    return result
+
+
+def _reference_info_block(reference_file_name: list[str]) -> str:
     """Design 에이전트 instruction에 덧붙여 references 슬라이드(마지막 장 바로 앞에 추가되는 한 장)에
-    표시할 출처 파일명 자리를 채우는 지시문. 실제 값은 항상 여기서 명시적으로 넘기고, 에이전트가
+    표시할 출처 파일명 목록 자리를 채우는 지시문. 실제 값은 항상 여기서 명시적으로 넘기고, 에이전트가
     sources/ 폴더 등을 스스로 뒤져서 알아내게 하지 않는다."""
+    names = _split_csv_list(reference_file_name)
+    listed = "\n".join(f"  - {n}" for n in names)
     return (
         "The deck must include one additional references slide, placed immediately before "
-        "the closing/last slide, listing the source document reference(s) below. Use this "
-        "exact value — do not look it up yourself, derive it from other files, or invent your own:\n"
-        f"- Reference(s): {reference_file_name}"
+        "the closing/last slide, listing the source document reference(s) below. Use these "
+        "exact values — do not look them up yourself, derive them from other files, or invent your own:\n"
+        f"{listed}"
     )
 
 
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_\-.]+$")
-
-
-def _split_ids(ids: list[str]) -> list[str]:
-    """list[str]=Form(...)로 여러 필드를 제대로 보낸 경우와, Swagger UI 등 일부 클라이언트가
-    'a,b' 처럼 한 필드에 콤마로 이어붙여 보내는 경우를 모두 지원하도록 각 원소를 콤마로 추가 분리."""
-    result = []
-    for raw in ids:
-        result.extend(part.strip() for part in raw.split(",") if part.strip())
-    return result
 
 
 def _write_sources_as_markdown(workspace: Path, ids: list[str], sources: dict[str, dict]) -> list[Path]:
@@ -653,7 +655,7 @@ async def design_hynix_template(
     emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
-    reference_file_name: str = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명"),
+    reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
@@ -697,7 +699,7 @@ async def design_free_template(
     emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
-    reference_file_name: str = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명"),
+    reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
@@ -745,7 +747,7 @@ async def template_based_ppt_generation(
     emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
-    reference_file_name: str = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명"),
+    reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
@@ -784,7 +786,7 @@ async def template_free_ppt_generation(
     emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
-    reference_file_name: str = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명"),
+    reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
@@ -823,7 +825,7 @@ async def template_based_ppt_generation_db(
     emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
-    reference_file_name: str = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명"),
+    reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
@@ -837,7 +839,7 @@ async def template_based_ppt_generation_db(
     from deeppresenter.tools.db import fetch_raw_texts
     from deeppresenter.utils.constants import PACKAGE_DIR, WORKSPACE_BASE
 
-    ids = _split_ids(ids)
+    ids = _split_csv_list(ids)
     if not ids:
         raise HTTPException(status_code=400, detail="ids must contain at least one id.")
 
@@ -898,7 +900,7 @@ async def template_free_ppt_generation_db(
     emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
-    reference_file_name: str = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명"),
+    reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
@@ -912,7 +914,7 @@ async def template_free_ppt_generation_db(
     from deeppresenter.tools.db import fetch_raw_texts
     from deeppresenter.utils.constants import PACKAGE_DIR, WORKSPACE_BASE
 
-    ids = _split_ids(ids)
+    ids = _split_csv_list(ids)
     if not ids:
         raise HTTPException(status_code=400, detail="ids must contain at least one id.")
 
