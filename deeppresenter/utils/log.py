@@ -12,7 +12,7 @@ from deeppresenter.utils.constants import LOGGING_LEVEL
 # root logger (configured once, in main-ui.py's logging.basicConfig) so every
 # log line — deeppresenter's, httpx's, uvicorn's — shares one format and one
 # stream instead of each module keeping its own handler/format.
-logger = logging.getLogger("deeppresenter")
+logger = logging.getLogger("PPT-AGENT")
 logger.setLevel(LOGGING_LEVEL)
 
 
