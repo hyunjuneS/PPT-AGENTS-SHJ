@@ -4,6 +4,7 @@ import os
 import re
 import secrets
 import string
+import sys
 import time
 import uuid
 from datetime import datetime
@@ -24,6 +25,11 @@ load_dotenv()
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    # logging.StreamHandler()의 기본 스트림은 stdout이 아니라 stderr — 명시하지 않으면
+    # 정상 운영 로그(logger.info)가 컨테이너의 STDERR로 나가서, 같은 stdout으로 나가는
+    # deeppresenter/utils/log.py의 print() 기반 에이전트 진행 로그와 스트림이 갈라진다
+    # (Loki 같은 로그 수집기에서 STDOUT/STDERR가 다른 스트림으로 분리돼 보이는 원인).
+    stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
 
