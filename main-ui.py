@@ -18,19 +18,25 @@ from fastapi.responses import FileResponse
 
 from agents.llms import AsyncLLM
 from deeppresenter.utils.config import LLM
+from deeppresenter.utils.log import SessionIdFilter, set_session_id
 
 # .env 파일을 os.environ 에 주입. reload worker 재import 시에도 동일하게 적용된다.
 load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    # session_id — 동시에 여러 요청이 들어와도 로그 한 줄 한 줄이 어느 요청 것인지 구분할 수
+    # 있도록 모든 로그 라인에 붙인다 (SessionIdFilter가 채움). Loki에서
+    # `|= "session_id=abc12345"`로 필터링하면 그 요청의 로그만 시간순으로 모아 볼 수 있다.
+    format="%(asctime)s [%(levelname)s] %(name)s session_id=%(session_id)s: %(message)s",
     # logging.StreamHandler()의 기본 스트림은 stdout이 아니라 stderr — 명시하지 않으면
     # 정상 운영 로그(logger.info)가 컨테이너의 STDERR로 나가서, 같은 stdout으로 나가는
     # deeppresenter/utils/log.py의 print() 기반 에이전트 진행 로그와 스트림이 갈라진다
     # (Loki 같은 로그 수집기에서 STDOUT/STDERR가 다른 스트림으로 분리돼 보이는 원인).
     stream=sys.stdout,
 )
+for _handler in logging.root.handlers:
+    _handler.addFilter(SessionIdFilter())
 logger = logging.getLogger(__name__)
 
 # openai SDK가 내부적으로 쓰는 httpx의 요청/응답 로그를 켜둔다.
@@ -493,6 +499,7 @@ async def research(
 
     # 세션별 workspace 생성
     session_id = str(uuid.uuid4())[:8]
+    set_session_id(session_id)
     workspace = WORKSPACE_BASE / session_id
     workspace.mkdir(parents=True, exist_ok=True)
 
@@ -679,6 +686,7 @@ async def design_hynix_template(
         raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
 
     session_id = str(uuid.uuid4())[:8]
+    set_session_id(session_id)
     workspace = WORKSPACE_BASE / session_id
     workspace.mkdir(parents=True, exist_ok=True)
 
@@ -726,6 +734,7 @@ async def design_free_template(
         raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
 
     session_id = str(uuid.uuid4())[:8]
+    set_session_id(session_id)
     workspace = WORKSPACE_BASE / session_id
     workspace.mkdir(parents=True, exist_ok=True)
 
@@ -768,6 +777,7 @@ async def template_based_ppt_generation(
     config = _make_deep_config(research_llm=research_llm, design_llm=design_llm)
 
     session_id = str(uuid.uuid4())[:8]
+    set_session_id(session_id)
     workspace = WORKSPACE_BASE / session_id
     workspace.mkdir(parents=True, exist_ok=True)
 
@@ -807,6 +817,7 @@ async def template_free_ppt_generation(
     config = _make_deep_config(research_llm=research_llm, design_llm=design_llm)
 
     session_id = str(uuid.uuid4())[:8]
+    set_session_id(session_id)
     workspace = WORKSPACE_BASE / session_id
     workspace.mkdir(parents=True, exist_ok=True)
 
@@ -854,6 +865,7 @@ async def template_based_ppt_generation_db(
     config = _make_deep_config(research_llm=research_llm, design_llm=design_llm)
 
     session_id = str(uuid.uuid4())[:8]
+    set_session_id(session_id)
     workspace = WORKSPACE_BASE / session_id
     workspace.mkdir(parents=True, exist_ok=True)
 
@@ -929,6 +941,7 @@ async def template_free_ppt_generation_db(
     config = _make_deep_config(research_llm=research_llm, design_llm=design_llm)
 
     session_id = str(uuid.uuid4())[:8]
+    set_session_id(session_id)
     workspace = WORKSPACE_BASE / session_id
     workspace.mkdir(parents=True, exist_ok=True)
 
