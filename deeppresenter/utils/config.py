@@ -8,7 +8,7 @@ from typing import Any
 import json_repair
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, Field
 
 from deeppresenter.utils.constants import RETRY_TIMES
 from deeppresenter.utils.log import debug, logging_openai_exceptions
@@ -48,18 +48,23 @@ class LLM(BaseModel):
     sampling_parameters: dict[str, Any] = Field(default_factory=dict)
     is_multimodal: bool | None = None
 
-    _client: AsyncOpenAI | None = PrivateAttr(default=None)
-
     model_config = {"arbitrary_types_allowed": True}
 
     def model_post_init(self, _):
-        self._client = AsyncOpenAI(
-            base_url=self.base_url,
-            api_key=self.api_key,
-        )
         if self.is_multimodal is None:
             lower = self.model.lower()
             self.is_multimodal = any(w in lower for w in ("gpt", "claude", "gemini", "vl", "glm"))
+
+    @property
+    def _client(self) -> AsyncOpenAI:
+        # Built fresh from the CURRENT base_url/api_key on every access rather than cached once at
+        # construction. LLM instances are routinely produced via model_copy(update=...) (e.g.
+        # main-ui.py's _resolve_tiered_llm, overriding base_url/model per request) — model_copy
+        # does NOT re-run model_post_init, so a client cached there at first construction would
+        # keep silently pointing at the pre-copy base_url forever, even though .base_url/.model
+        # correctly report the new values. Constructing AsyncOpenAI is cheap/local (no I/O), so
+        # there's no real cost to not caching it.
+        return AsyncOpenAI(base_url=self.base_url, api_key=self.api_key)
 
     @property
     def model_name(self) -> str:
