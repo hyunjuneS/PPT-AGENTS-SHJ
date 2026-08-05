@@ -66,13 +66,27 @@ async def add_process_time_header(request: Request, call_next):
 # OPENAI_BASE_URL 미설정 시 폴백하는 기본 엔드포인트. API 요청의 base_url 파라미터로도 덮어쓸 수 있다.
 _DEFAULT_BASE_URL = "http://workplace-litellm.aipp02.skhynix.com/v1"
 
+# 티어(big/middle/small)별 전용 엔드포인트 — 미설정 시 OPENAI_BASE_URL → _DEFAULT_BASE_URL 순으로 폴백.
+# 이전에는 세 티어가 전부 OPENAI_BASE_URL 하나만 공유했는데, 티어별로 실제 서빙되는 서버가
+# 다를 수 있어서 (예: big은 A 게이트웨이, small은 B 게이트웨이) 나눴다.
+_MODEL_TIER_URL_ENV = {"big": "MODEL_BIG_URL", "middle": "MODEL_MIDDLE_URL", "small": "MODEL_SMALL_URL"}
+
+
+def _tier_base_url(model_size: str) -> str:
+    return (
+        os.environ.get(_MODEL_TIER_URL_ENV[model_size])
+        or os.environ.get("OPENAI_BASE_URL")
+        or _DEFAULT_BASE_URL
+    )
+
+
 # Research/Design 단계에 별도 instruction을 받지 않는 엔드포인트에서 사용하는 고정 지시문.
 _RESEARCH_DEFAULT_INSTRUCTION = "Create presentation content based on the attached document."
 _DESIGN_DEFAULT_INSTRUCTION = "Create a professional presentation."
 
 _llm = AsyncLLM(
     model=os.environ.get("MODEL_BIG", "claude-opus-4-5"),
-    base_url=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL,
+    base_url=_tier_base_url("big"),
     api_key=os.environ.get("OPENAI_API_KEY", ""),
     timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
 )
@@ -81,7 +95,7 @@ _llm = AsyncLLM(
 # API 키는 VLM_API_KEY가 있으면 사용하고, 없으면 OPENAI_API_KEY로 폴백한다.
 _design_llm = AsyncLLM(
     model=os.environ.get("DESIGN_MODEL_NAME") or os.environ.get("MODEL_BIG", "claude-opus-4-5"),
-    base_url=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL,
+    base_url=_tier_base_url("big"),
     api_key=os.environ.get("VLM_API_KEY") or os.environ.get("OPENAI_API_KEY", ""),
     timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
 )
@@ -130,16 +144,16 @@ def _build_tier_llm(model_size: str) -> LLM | None:
     if model_size == "big":
         api_key = os.environ.get("OPENAI_API_KEY_BIG") or api_key
 
-    return LLM(model=model_name, base_url=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, api_key=api_key)
+    return LLM(model=model_name, base_url=_tier_base_url(model_size), api_key=api_key)
 
 
 _TIER_LLMS: dict[str, LLM | None] = {size: _build_tier_llm(size) for size in _MODEL_TIER_ENV}
 
 logger.info(
-    "Model tiers configured: big=%s middle=%s small=%s",
-    _TIER_LLMS["big"].model if _TIER_LLMS["big"] else None,
-    _TIER_LLMS["middle"].model if _TIER_LLMS["middle"] else None,
-    _TIER_LLMS["small"].model if _TIER_LLMS["small"] else None,
+    "Model tiers configured: big=%s@%s middle=%s@%s small=%s@%s",
+    _TIER_LLMS["big"].model if _TIER_LLMS["big"] else None, _TIER_LLMS["big"].base_url if _TIER_LLMS["big"] else None,
+    _TIER_LLMS["middle"].model if _TIER_LLMS["middle"] else None, _TIER_LLMS["middle"].base_url if _TIER_LLMS["middle"] else None,
+    _TIER_LLMS["small"].model if _TIER_LLMS["small"] else None, _TIER_LLMS["small"].base_url if _TIER_LLMS["small"] else None,
 )
 
 
@@ -222,20 +236,43 @@ def _parse_additional_request(raw: str | None) -> dict:
     return parsed
 
 
-def _resolve_tiered_llm(model_size: str, additional_request: str | None, base_url: str | None = None) -> LLM:
-    """시작 시점에 만들어둔 티어별 LLM(_TIER_LLMS)에 additional_request/base_url을 병합해 반환."""
+def _resolve_tiered_llm(
+    model_size: str,
+    additional_request: str | None,
+    base_url: str | None = None,
+    model_name: str | None = None,
+) -> LLM:
+    """시작 시점에 만들어둔 티어별 LLM(_TIER_LLMS)에 additional_request/base_url/model_name을 병합해
+    반환. model_name을 주면 big/middle/small 티어를 아예 안 쓰고(그 티어가 .env에 설정 안 돼 있어도)
+    그 model_name(+base_url, 없으면 그 티어의 기본 엔드포인트)으로 즉석 LLM을 만든다 — 티어 체계를
+    쓰고 싶지 않을 때의 탈출구."""
     base = _TIER_LLMS[model_size]
-    if base is None:
-        raise HTTPException(
-            status_code=400,
-            detail=f"{_MODEL_TIER_ENV[model_size]} is not configured in .env",
-        )
     params = _parse_additional_request(additional_request)
+
+    if base is None:
+        if model_name is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{_MODEL_TIER_ENV[model_size]} is not configured in .env "
+                       "— pass model_name to use a custom model instead.",
+            )
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+        if model_size == "big":
+            api_key = os.environ.get("OPENAI_API_KEY_BIG") or api_key
+        return LLM(
+            model=model_name,
+            base_url=base_url or _tier_base_url(model_size),
+            api_key=api_key,
+            sampling_parameters=params,
+        )
+
     updates = {}
     if params:
         updates["sampling_parameters"] = {**base.sampling_parameters, **params}
     if base_url:
         updates["base_url"] = base_url
+    if model_name:
+        updates["model"] = model_name
     if not updates:
         return base
     return base.model_copy(update=updates)
@@ -488,13 +525,14 @@ async def research(
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
-    base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
+    base_url: str | None = Form(default=None, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
+    model_name: str | None = Form(default=None, description="big/middle/small 티어 대신 직접 지정할 모델 이름. base_url과 함께 주면 티어 설정과 무관하게 이 모델+엔드포인트를 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
 ):
     """.md 파일 → Research 에이전트(LangGraph 엔진)로 슬라이드 원고 생성."""
     from deeppresenter.utils.constants import WORKSPACE_BASE
 
-    tiered_llm = _resolve_tiered_llm(model_size, additional_request, base_url)
+    tiered_llm = _resolve_tiered_llm(model_size, additional_request, base_url, model_name)
     config = _make_deep_config(research_llm=tiered_llm)
 
     # 세션별 workspace 생성
@@ -670,7 +708,8 @@ async def design_hynix_template(
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
     reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
-    base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
+    base_url: str | None = Form(default=None, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
+    model_name: str | None = Form(default=None, description="big/middle/small 티어 대신 직접 지정할 모델 이름. base_url과 함께 주면 티어 설정과 무관하게 이 모델+엔드포인트를 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
 ):
     """슬라이드 원고 .md → Design 에이전트(LangGraph 엔진) → HTML 슬라이드 생성 → PPTX 반환."""
@@ -693,7 +732,7 @@ async def design_hynix_template(
     manuscript_path = workspace / file.filename
     manuscript_path.write_bytes(raw)
 
-    tiered_llm = _resolve_tiered_llm(model_size, additional_request, base_url)
+    tiered_llm = _resolve_tiered_llm(model_size, additional_request, base_url, model_name)
     config = _make_deep_config(design_llm=tiered_llm)
 
     full_instruction = (
@@ -715,7 +754,8 @@ async def design_free_template(
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
     reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     model_size: Literal["big", "middle", "small"] = Form(default="big", description="사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
-    base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
+    base_url: str | None = Form(default=None, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
+    model_name: str | None = Form(default=None, description="big/middle/small 티어 대신 직접 지정할 모델 이름. base_url과 함께 주면 티어 설정과 무관하게 이 모델+엔드포인트를 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
 ):
     """슬라이드 원고 .md → Design 에이전트(LangGraph 엔진) → HTML 슬라이드 생성 → PPTX 반환.
@@ -741,7 +781,7 @@ async def design_free_template(
     manuscript_path = workspace / file.filename
     manuscript_path.write_bytes(raw)
 
-    tiered_llm = _resolve_tiered_llm(model_size, additional_request, base_url)
+    tiered_llm = _resolve_tiered_llm(model_size, additional_request, base_url, model_name)
     config = _make_deep_config(design_llm=tiered_llm)
 
     full_instruction = (
@@ -765,15 +805,16 @@ async def template_based_ppt_generation(
     reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
-    base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
+    base_url: str | None = Form(default=None, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
+    model_name: str | None = Form(default=None, description="big/middle/small 티어 대신 직접 지정할 모델 이름. base_url과 함께 주면 티어 설정과 무관하게 이 모델+엔드포인트를 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
 ):
     """.md 파일 → Research 에이전트로 원고 생성 → Design(Hynix 템플릿) 에이전트로 슬라이드 생성,
     변환까지 한 요청에서 이어서 처리하고 PPTX를 반환한다."""
     from deeppresenter.utils.constants import WORKSPACE_BASE
 
-    research_llm = _resolve_tiered_llm(research_model_size, additional_request, base_url)
-    design_llm = _resolve_tiered_llm(design_model_size, additional_request, base_url)
+    research_llm = _resolve_tiered_llm(research_model_size, additional_request, base_url, model_name)
+    design_llm = _resolve_tiered_llm(design_model_size, additional_request, base_url, model_name)
     config = _make_deep_config(research_llm=research_llm, design_llm=design_llm)
 
     session_id = str(uuid.uuid4())[:8]
@@ -805,15 +846,16 @@ async def template_free_ppt_generation(
     reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
-    base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
+    base_url: str | None = Form(default=None, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
+    model_name: str | None = Form(default=None, description="big/middle/small 티어 대신 직접 지정할 모델 이름. base_url과 함께 주면 티어 설정과 무관하게 이 모델+엔드포인트를 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
 ):
     """.md 파일 → Research 에이전트로 원고 생성 → Design(자유 템플릿) 에이전트로 슬라이드 생성,
     변환까지 한 요청에서 이어서 처리하고 PPTX를 반환한다."""
     from deeppresenter.utils.constants import WORKSPACE_BASE
 
-    research_llm = _resolve_tiered_llm(research_model_size, additional_request, base_url)
-    design_llm = _resolve_tiered_llm(design_model_size, additional_request, base_url)
+    research_llm = _resolve_tiered_llm(research_model_size, additional_request, base_url, model_name)
+    design_llm = _resolve_tiered_llm(design_model_size, additional_request, base_url, model_name)
     config = _make_deep_config(research_llm=research_llm, design_llm=design_llm)
 
     session_id = str(uuid.uuid4())[:8]
@@ -845,7 +887,8 @@ async def template_based_ppt_generation_db(
     reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
-    base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
+    base_url: str | None = Form(default=None, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
+    model_name: str | None = Form(default=None, description="big/middle/small 티어 대신 직접 지정할 모델 이름. base_url과 함께 주면 티어 설정과 무관하게 이 모델+엔드포인트를 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
     additional_instruction: str | None = Form(default=None, description="Research 매뉴스크립트 작성 시 반영할 추가 지시사항 (예: 특정 내용을 강조해달라는 지시)"),
 ):
@@ -860,8 +903,8 @@ async def template_based_ppt_generation_db(
     if not ids:
         raise HTTPException(status_code=400, detail="ids must contain at least one id.")
 
-    research_llm = _resolve_tiered_llm(research_model_size, additional_request, base_url)
-    design_llm = _resolve_tiered_llm(design_model_size, additional_request, base_url)
+    research_llm = _resolve_tiered_llm(research_model_size, additional_request, base_url, model_name)
+    design_llm = _resolve_tiered_llm(design_model_size, additional_request, base_url, model_name)
     config = _make_deep_config(research_llm=research_llm, design_llm=design_llm)
 
     session_id = str(uuid.uuid4())[:8]
@@ -921,7 +964,8 @@ async def template_free_ppt_generation_db(
     reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
-    base_url: str | None = Form(default=os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
+    base_url: str | None = Form(default=None, description="OpenAI 호환 API 엔드포인트. 비워서 보내면 해당 티어의 기본 엔드포인트를 그대로 사용"),
+    model_name: str | None = Form(default=None, description="big/middle/small 티어 대신 직접 지정할 모델 이름. base_url과 함께 주면 티어 설정과 무관하게 이 모델+엔드포인트를 사용"),
     additional_request: str | None = Form(default="{}", description='LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'),
     additional_instruction: str | None = Form(default=None, description="Research 매뉴스크립트 작성 시 반영할 추가 지시사항 (예: 특정 내용을 강조해달라는 지시)"),
 ):
@@ -936,8 +980,8 @@ async def template_free_ppt_generation_db(
     if not ids:
         raise HTTPException(status_code=400, detail="ids must contain at least one id.")
 
-    research_llm = _resolve_tiered_llm(research_model_size, additional_request, base_url)
-    design_llm = _resolve_tiered_llm(design_model_size, additional_request, base_url)
+    research_llm = _resolve_tiered_llm(research_model_size, additional_request, base_url, model_name)
+    design_llm = _resolve_tiered_llm(design_model_size, additional_request, base_url, model_name)
     config = _make_deep_config(research_llm=research_llm, design_llm=design_llm)
 
     session_id = str(uuid.uuid4())[:8]
