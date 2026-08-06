@@ -12,7 +12,6 @@ shared, so design_graph.py (already verified working) stays untouched.
 
 import json
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -24,13 +23,7 @@ from deeppresenter.graph.engine import build_graph
 from deeppresenter.graph.llm_adapter import to_chat_openai
 from deeppresenter.graph.tools import build_tools_for_role
 from deeppresenter.utils.config import DeepPresenterConfig
-from deeppresenter.utils.constants import (
-    AGENT_PROMPT,
-    CONTEXT_MODE_PROMPT,
-    MAX_TOOLCALL_PER_TURN,
-    OFFLINE_PROMPT,
-    PACKAGE_DIR,
-)
+from deeppresenter.utils.constants import CONTEXT_MODE_PROMPT, OFFLINE_PROMPT, PACKAGE_DIR
 from deeppresenter.utils.log import show_agent_start
 from deeppresenter.utils.typings import InputRequest, RoleConfig
 
@@ -62,21 +55,11 @@ def _load_role_config(config_file: str | Path | None) -> RoleConfig:
 def _build_system_prompt(
     role_config: RoleConfig,
     language: str,
-    tool_names: list[str],
-    workspace: Path,
-    cutoff_len: int,
     config: DeepPresenterConfig,
 ) -> str:
     system = role_config.system
     system += f"\n\n{_LANG_INSTRUCTION.get(language, _LANG_INSTRUCTION['en'])}"
 
-    if "execute_command" in tool_names:
-        system += AGENT_PROMPT.format(
-            workspace=str(workspace),
-            cutoff_len=cutoff_len,
-            time=datetime.now().strftime("%Y-%m-%d"),
-            max_toolcall_per_turn=MAX_TOOLCALL_PER_TURN,
-        )
     if config.offline_mode:
         system += OFFLINE_PROMPT
     if config.context_folding:
@@ -157,9 +140,7 @@ async def run_research_graph(
         )
         tool_names = [t.name for t in tools]
 
-        system_text = _build_system_prompt(
-            role_config, language, tool_names, workspace, env.cutoff_len, config
-        )
+        system_text = _build_system_prompt(role_config, language, config)
 
         prompt_template = Template(role_config.instruction, undefined=StrictUndefined)
         instruction_text = prompt_template.render(
