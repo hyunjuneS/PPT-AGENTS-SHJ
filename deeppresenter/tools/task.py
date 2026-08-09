@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from deeppresenter.utils.constants import HEAVY_REFLECT, TOOL_CUTOFF_LEN
+from deeppresenter.utils.constants import HEAVY_REFLECT, INSPECT_CONTENT_MAX_CALLS, TOOL_CUTOFF_LEN
 from deeppresenter.utils.log import debug, warning
 
 _SCREENSHOT_JS = Path(__file__).resolve().parents[1] / "html2pptx" / "screenshot.js"
@@ -392,6 +392,160 @@ INSPECT_MANUSCRIPT_SPEC = {
 }
 
 
+# ── inspect_content ───────────────────────────────────────────────────────────
+
+# Fallback only — used if this tool is ever invoked without an `llm` bound to it
+# (e.g. the old engine, deeppresenter/agents/, which doesn't support bound tool
+# kwargs). The graph engine always binds the role's own resolved LLM instead
+# (see build_tools_for_role in deeppresenter/graph/tools.py), so this path uses
+# the exact same model/base_url/api_key the research agent itself is using.
+_FALLBACK_BASE_URL = "http://workplace-litellm.aipp02.skhynix.com/v1"
+
+_MAX_REVIEW_CHARS = 60_000  # cap manuscript+sources sent for this review call only
+
+_CONTENT_REVIEW_SYSTEM_PROMPT = """You are a meticulous editor reviewing a presentation manuscript
+(Markdown, pages separated by `---`) for content-quality problems that a page-count/size
+check cannot catch. Check for exactly three things:
+1. Balance: is content spread reasonably evenly across pages, or are some pages nearly
+   empty while others are overloaded? The first page (cover) and last page (closing) are
+   expected to be short by design — never flag them for this.
+2. Duplication: does any page repeat a fact or point already made on another page?
+3. Omission: is there any key fact, data point, or claim in the source documents (if
+   provided) that does not appear anywhere in the manuscript?
+Respond with STRICT JSON ONLY — no markdown fences, no commentary — matching exactly this
+shape: {"issues": ["<specific issue, naming the page number(s) or source file involved>"]}.
+If there are no issues, respond with {"issues": []}."""
+
+_CONTENT_REVIEW_USER_TEMPLATE = """<manuscript>
+{manuscript}
+</manuscript>
+
+{sources_block}
+
+Respond with STRICT JSON ONLY, exactly in this shape: {{"issues": ["..."]}} (empty list if none)."""
+
+
+def _default_llm():
+    from deeppresenter.utils.config import LLM
+    return LLM(
+        model=os.environ.get("MODEL_BIG", "claude-opus-4-5"),
+        base_url=os.environ.get("OPENAI_BASE_URL") or _FALLBACK_BASE_URL,
+        api_key=os.environ.get("OPENAI_API_KEY", ""),
+    )
+
+
+def _truncate(text: str, max_chars: int) -> str:
+    text = text.strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + f"\n... (truncated, original length {len(text)} characters)"
+
+
+class InspectContentLimiter:
+    """Caps how many times inspect_content will actually run its LLM review within
+    a single agent run — each call is a real LLM request, and nothing in the ReAct
+    loop otherwise stops the agent from calling it forever on a "keep checking until
+    it's clean" instruction. One instance is created per agent run (see
+    build_tools_for_role in deeppresenter/graph/tools.py) and bound onto the tool,
+    so the count is per-run, not global/shared across concurrent requests."""
+
+    def __init__(self, max_calls: int = INSPECT_CONTENT_MAX_CALLS):
+        self.max_calls = max_calls
+        self.count = 0
+
+
+async def inspect_content(
+    path: str,
+    sources_dir: str | None = None,
+    llm=None,
+    limiter: InspectContentLimiter | None = None,
+) -> str:
+    """
+    LLM-based content-quality review of a Markdown manuscript that inspect_manuscript
+    (page count/size only) does not catch: whether content is evenly distributed across
+    pages, whether any pages duplicate each other, and whether any source document's
+    content is missing from the manuscript.
+    """
+    if limiter is not None:
+        if limiter.count >= limiter.max_calls:
+            return (
+                f"inspect_content has already been called {limiter.count} time(s) — "
+                f"the maximum ({limiter.max_calls}) for this run. Do not call it again. "
+                "Use your best judgment on any remaining issues, then call finalize."
+            )
+        limiter.count += 1
+
+    p = Path(path)
+    assert p.exists() and p.suffix == ".md", f"Not a valid .md file: {path}"
+    content = p.read_text(encoding="utf-8")
+    assert content.strip(), "Manuscript is empty"
+
+    src_dir = Path(sources_dir) if sources_dir else p.parent / "sources"
+    sources_block = "(no source documents available to check omission against)"
+    if src_dir.is_dir():
+        src_files = sorted(src_dir.glob("*.md"))
+        if src_files:
+            parts = [
+                f'<source name="{f.name}">\n{f.read_text(encoding="utf-8")}\n</source>'
+                for f in src_files
+            ]
+            sources_block = "<source_documents>\n" + "\n\n".join(parts) + "\n</source_documents>"
+
+    from deeppresenter.utils.config import get_json_from_response
+
+    messages = [
+        {"role": "system", "content": _CONTENT_REVIEW_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": _CONTENT_REVIEW_USER_TEMPLATE.format(
+                manuscript=_truncate(content, _MAX_REVIEW_CHARS),
+                sources_block=_truncate(sources_block, _MAX_REVIEW_CHARS),
+            ),
+        },
+    ]
+
+    response = await (llm or _default_llm()).run(messages=messages)
+    text = response.choices[0].message.content or ""
+    parsed = get_json_from_response(text)
+    issues = parsed.get("issues") if isinstance(parsed, dict) else None
+    issues = issues or []
+
+    if issues:
+        return "Issues found:\n" + "\n".join(f"- {i}" for i in issues)
+    return "Content looks good: no balance, duplication, or omission issues found."
+
+
+INSPECT_CONTENT_SPEC = {
+    "type": "function",
+    "function": {
+        "name": "inspect_content",
+        "description": (
+            "Check manuscript content quality beyond page count/size: whether content is "
+            "evenly distributed across pages, whether any pages duplicate each other, and "
+            "whether any source document's key content is missing from the manuscript. "
+            "Call this after inspect_manuscript, before finalize. "
+            f"Can be called at most {INSPECT_CONTENT_MAX_CALLS} times per run — budget your "
+            "manuscript revisions accordingly, and finalize with your best judgment once "
+            "the limit is reached even if minor issues remain."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path to the .md manuscript file."},
+                "sources_dir": {
+                    "type": "string",
+                    "description": (
+                        "Absolute path to the directory of source .md files to check coverage against. "
+                        "Defaults to a 'sources' folder next to the manuscript."
+                    ),
+                },
+            },
+            "required": ["path"],
+        },
+    },
+}
+
+
 # ── inspect_slide ─────────────────────────────────────────────────────────────
 
 async def inspect_slide(
@@ -656,5 +810,6 @@ ALL_TOOLS: dict[str, tuple[dict, object]] = {
     "list_directory":     (LIST_DIRECTORY_SPEC,     list_directory),
     "execute_command":    (EXECUTE_COMMAND_SPEC,    execute_command),
     "inspect_manuscript": (INSPECT_MANUSCRIPT_SPEC, inspect_manuscript),
+    "inspect_content":    (INSPECT_CONTENT_SPEC,    inspect_content),
     "inspect_slide":      (INSPECT_SLIDE_SPEC,      inspect_slide),
 }

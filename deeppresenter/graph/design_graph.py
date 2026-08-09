@@ -10,7 +10,6 @@ endpoints: it only accumulates a `turns` count and truncated previews).
 import json
 import shutil
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -22,18 +21,14 @@ from deeppresenter.graph.engine import build_graph
 from deeppresenter.graph.llm_adapter import to_chat_openai
 from deeppresenter.graph.tools import build_tools_for_role
 from deeppresenter.utils.config import DeepPresenterConfig
-from deeppresenter.utils.constants import (
-    AGENT_PROMPT,
-    CONTEXT_MODE_PROMPT,
-    MAX_TOOLCALL_PER_TURN,
-    OFFLINE_PROMPT,
-    PACKAGE_DIR,
-)
+from deeppresenter.utils.constants import CONTEXT_MODE_PROMPT, OFFLINE_PROMPT, PACKAGE_DIR
 from deeppresenter.utils.log import show_agent_start
 from deeppresenter.utils.typings import InputRequest, RoleConfig
 
 _HYNIX_TEMPLATE_DIR = str(PACKAGE_DIR / "roles" / "templates" / "hynix")
 _HYNIX_LOGO_FILENAME = "ppt-main_logo.png"
+_HYNIX_SECRET_LABEL_FILENAME = "ppt-secret-label.png"
+_HYNIX_TEMPLATE_ASSETS = (_HYNIX_LOGO_FILENAME, _HYNIX_SECRET_LABEL_FILENAME)
 _RECURSION_LIMIT = 500  # old engine had no hard turn cap for Design; generous headroom here
 
 _LANG_INSTRUCTION = {
@@ -62,21 +57,11 @@ def _load_role_config(config_file: str | Path | None) -> RoleConfig:
 def _build_system_prompt(
     role_config: RoleConfig,
     language: str,
-    tool_names: list[str],
-    workspace: Path,
-    cutoff_len: int,
     config: DeepPresenterConfig,
 ) -> str:
     system = role_config.system
     system += f"\n\n{_LANG_INSTRUCTION.get(language, _LANG_INSTRUCTION['en'])}"
 
-    if "execute_command" in tool_names:
-        system += AGENT_PROMPT.format(
-            workspace=str(workspace),
-            cutoff_len=cutoff_len,
-            time=datetime.now().strftime("%Y-%m-%d"),
-            max_toolcall_per_turn=MAX_TOOLCALL_PER_TURN,
-        )
     if config.offline_mode:
         system += OFFLINE_PROMPT
     if config.context_folding:
@@ -149,11 +134,14 @@ async def run_design_graph(
 
     if "template_dir" in role_config.instruction:
         # cover-page.html(등 하이닉스 템플릿)이 배경 이미지 등에서 상대경로로 참조할 수 있도록,
-        # 슬라이드가 실제로 저장되는 slides/ 안에도 로고를 넣어준다 — 원본 template_dir 기준
-        # 상대경로는 slides/에 복사된 slide_01.html 입장에선 해석되지 않는다.
-        logo_src = Path(_HYNIX_TEMPLATE_DIR) / _HYNIX_LOGO_FILENAME
-        if logo_src.exists():
-            shutil.copy(logo_src, workspace / "slides" / _HYNIX_LOGO_FILENAME)
+        # 슬라이드가 실제로 저장되는 slides/ 안에도 로고/라벨 이미지를 넣어준다 — 원본 template_dir 기준
+        # 상대경로는 slides/에 복사된 slide_01.html 입장에선 해석되지 않는다. main-ui.py의 MinIO
+        # 업로드(htmls/combined_html)는 slides/ 안의 이미지 파일을 확장자로 스캔해서 통째로 올리므로,
+        # 여기 복사되는 것만으로 그쪽도 자동으로 같이 업로드된다.
+        for asset_name in _HYNIX_TEMPLATE_ASSETS:
+            asset_src = Path(_HYNIX_TEMPLATE_DIR) / asset_name
+            if asset_src.exists():
+                shutil.copy(asset_src, workspace / "slides" / asset_name)
 
     llm = config[role_config.use_model]
     chat_model = to_chat_openai(llm)
@@ -167,9 +155,7 @@ async def run_design_graph(
         )
         tool_names = [t.name for t in tools]
 
-        system_text = _build_system_prompt(
-            role_config, language, tool_names, workspace, env.cutoff_len, config
-        )
+        system_text = _build_system_prompt(role_config, language, config)
 
         prompt_template = Template(role_config.instruction, undefined=StrictUndefined)
         instruction_text = prompt_template.render(

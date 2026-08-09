@@ -10,7 +10,7 @@ from typing import Any, Callable, Literal
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, create_model
 
-from deeppresenter.tools.task import ALL_TOOLS
+from deeppresenter.tools.task import ALL_TOOLS, InspectContentLimiter
 from deeppresenter.utils.toolset import resolve_toolset
 from deeppresenter.utils.typings import RoleConfig
 
@@ -72,11 +72,18 @@ def build_tools_for_role(
     tools_dict: dict[str, dict],
     server_tools: dict[str, list[str]],
     finalize_overrides: dict[str, Any] | None = None,
+    llm: Any | None = None,
 ) -> list[StructuredTool]:
     """finalize_overrides lets the caller bind e.g. agent_name="Design" onto the
     finalize tool at construction time (mirrors the old engine's post-hoc
     args["agent_name"] = self.name injection in Agent.execute(), agent.py:275-276,
-    without mutating call arguments after the fact)."""
+    without mutating call arguments after the fact).
+
+    llm, if given, is bound onto inspect_content the same way — so its content
+    review runs on the exact same model/base_url/api_key the calling role's own
+    chat_model uses, not a separately-configured one. inspect_content also always
+    gets a fresh InspectContentLimiter bound here (one per build_tools_for_role
+    call, i.e. per agent run) so it can't be called an unbounded number of times."""
     specs = resolve_toolset(role_config.toolset, tools_dict, server_tools)
 
     structured_tools: list[StructuredTool] = []
@@ -86,6 +93,11 @@ def build_tools_for_role(
         func: Callable = raw_func
         if name == "finalize" and finalize_overrides:
             func = _bind_kwargs(raw_func, **finalize_overrides)
+        elif name == "inspect_content":
+            overrides: dict[str, Any] = {"limiter": InspectContentLimiter()}
+            if llm is not None:
+                overrides["llm"] = llm
+            func = _bind_kwargs(raw_func, **overrides)
 
         args_model = _build_args_model(spec, raw_func)
         kwargs: dict[str, Any] = dict(

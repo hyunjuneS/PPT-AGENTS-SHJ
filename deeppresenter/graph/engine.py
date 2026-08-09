@@ -177,11 +177,17 @@ def build_graph(
 
     async def postprocess_node(state: GraphState) -> dict:
         messages = state["messages"]
-        last_ai = next(m for m in reversed(messages) if isinstance(m, AIMessage))
-        tool_call_ids = {tc["id"] for tc in (last_ai.tool_calls or [])}
-        new_tool_msgs = [
-            m for m in messages if isinstance(m, ToolMessage) and m.tool_call_id in tool_call_ids
-        ]
+        last_ai_index = next(
+            i for i in range(len(messages) - 1, -1, -1) if isinstance(messages[i], AIMessage)
+        )
+        last_ai = messages[last_ai_index]
+        # Scoped by position — everything appended after this turn's AIMessage — rather than by
+        # matching tool_call_id across the whole history. Some OpenAI-compatible backends (seen
+        # with a Kimi/moonshot endpoint) don't guarantee tool_call ids are unique for the whole
+        # conversation, so id-based matching can pick up an earlier turn's ToolMessage whose id
+        # happens to repeat — re-logging its result here, and (worse) letting it be the one
+        # mutated by the budget-notice injection below instead of this turn's actual message.
+        new_tool_msgs = [m for m in messages[last_ai_index + 1:] if isinstance(m, ToolMessage)]
 
         for tm in new_tool_msgs:
             show_tool_result(str(tm.content))

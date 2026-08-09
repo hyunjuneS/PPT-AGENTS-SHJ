@@ -4,60 +4,51 @@ import logging
 import time
 import traceback
 from contextvars import ContextVar
-from pathlib import Path
 from typing import Any
 
 from deeppresenter.utils.constants import LOGGING_LEVEL
 
-_context_logger: ContextVar[logging.Logger | None] = ContextVar(
-    "_context_logger", default=None
-)
+# Single named logger for the whole deeppresenter package. Propagates to the
+# root logger (configured once, in main-ui.py's logging.basicConfig) so every
+# log line — deeppresenter's, httpx's, uvicorn's — shares one format and one
+# stream instead of each module keeping its own handler/format.
+logger = logging.getLogger("PPT-AGENT")
+logger.setLevel(LOGGING_LEVEL)
 
 
-def create_logger(name: str = __name__, log_file: str | Path | None = None) -> logging.Logger:
-    logger = logging.getLogger(name)
-    logger.setLevel(logging.DEBUG)
-    logger.propagate = False
-    logger.handlers.clear()
-
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(LOGGING_LEVEL)
-    fmt = logging.Formatter(
-        "%(levelname)-4s %(asctime)s [%(name)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-    console_handler.setFormatter(fmt)
-    logger.addHandler(console_handler)
-
-    if log_file is not None:
-        path = Path(log_file)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fh = logging.FileHandler(path, encoding="utf-8")
-        fh.setLevel(logging.DEBUG)
-        fh.setFormatter(fmt)
-        logger.addHandler(fh)
-
-    return logger
+def debug(msg, *args, **kwargs): logger.debug(msg, *args, **kwargs)
+def info(msg, *args, **kwargs): logger.info(msg, *args, **kwargs)
+def warning(msg, *args, **kwargs): logger.warning(msg, *args, **kwargs)
+def error(msg, *args, **kwargs): logger.error(msg, *args, **kwargs)
 
 
-def set_logger(name: str = __name__, log_file: str | Path | None = None) -> logging.Logger:
-    logger = create_logger(name, log_file)
-    _context_logger.set(logger)
-    return logger
+# ── Per-request log correlation ────────────────────────────────────────────────
+# Multiple API requests run concurrently in the same process (FastAPI/asyncio), so
+# their log lines interleave in the shared stdout stream. A ContextVar scopes
+# cleanly to "this request's asyncio Task and everything it awaits", so tagging
+# every log line with the request's session_id lets you filter one request's full
+# timeline back out in Loki (e.g. `|= "session_id=abc12345"`) even though the raw
+# stream has many requests' lines mixed together.
+
+_session_id_var: ContextVar[str] = ContextVar("session_id", default="-")
 
 
-def get_logger() -> logging.Logger:
-    ctx = _context_logger.get()
-    if ctx is None:
-        ctx = create_logger("deeppresenter.default")
-        _context_logger.set(ctx)
-    return ctx
+def set_session_id(session_id: str) -> None:
+    """Binds session_id to the current asyncio Task's logging context — call this
+    once per request, right after the request's session_id is minted. Every log
+    line emitted from within that request's await chain then carries it
+    automatically; concurrent requests each see only their own Task's value."""
+    _session_id_var.set(session_id)
 
 
-def debug(msg, *args, **kwargs): get_logger().debug(msg, *args, **kwargs)
-def info(msg, *args, **kwargs): get_logger().info(msg, *args, **kwargs)
-def warning(msg, *args, **kwargs): get_logger().warning(msg, *args, **kwargs)
-def error(msg, *args, **kwargs): get_logger().error(msg, *args, **kwargs)
+class SessionIdFilter(logging.Filter):
+    """Stamps every LogRecord with the current request's session_id. Attached to
+    the root handler in main-ui.py so it applies to every logger that propagates
+    there (deeppresenter, httpx, uvicorn, main-ui.py's own logger, ...)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.session_id = _session_id_var.get()
+        return True
 
 
 # ── Pretty progress display ───────────────────────────────────────────────────
@@ -74,7 +65,7 @@ _MAGENTA = "\033[35m"
 _AGENT_ICON = {"Research": "🔬", "Design": "🎨", "Planner": "📋"}
 _TOOL_ICON = {
     "write_file": "✍ ", "read_file": "📖", "inspect_slide": "🔍",
-    "inspect_manuscript": "🔍", "execute_command": "⚡", "finalize": "🏁",
+    "inspect_manuscript": "🔍", "inspect_content": "🔍", "execute_command": "⚡", "finalize": "🏁",
     "web_search": "🌐", "web_fetch": "🌐",
 }
 
@@ -87,12 +78,12 @@ def _shorten(s: str, n: int = 60) -> str:
 def show_agent_start(name: str, max_turns: int | None = None) -> None:
     icon = _AGENT_ICON.get(name, "🤖")
     limit = f"  (max {max_turns} turns)" if max_turns else ""
-    print(f"\n{_BOLD}{_CYAN}{icon}  {name} Agent{_R}{_DIM}{limit}{_R}", flush=True)
+    info(f"{_BOLD}{_CYAN}{icon}  {name} Agent{_R}{_DIM}{limit}{_R}")
 
 
 def show_agent_turn(name: str, turn: int, max_turns: int | None = None) -> None:
     limit = f"/{max_turns}" if max_turns else ""
-    print(f"  {_DIM}── turn {turn}{limit} {'─' * 36}{_R}", flush=True)
+    info(f"  {_DIM}── turn {turn}{limit} {'─' * 36}{_R}")
 
 
 def show_tool_call(tool: str, args: dict) -> None:
@@ -104,22 +95,18 @@ def show_tool_call(tool: str, args: dict) -> None:
             arg_val = _shorten(str(args[key]))
             break
     arg_str = f"  {_DIM}{arg_val}{_R}" if arg_val else ""
-    print(f"    {_YELLOW}{icon} {tool}{_R}{arg_str}", flush=True)
+    info(f"    {_YELLOW}{icon} {tool}{_R}{arg_str}")
 
 
 def show_tool_result(text: str, is_error: bool = False) -> None:
     color = _RED if is_error else _GREEN
     icon = "✗" if is_error else "✓"
-    print(f"      {color}{icon}{_R} {_DIM}{_shorten(text, 80)}{_R}", flush=True)
+    info(f"      {color}{icon}{_R} {_DIM}{_shorten(text, 80)}{_R}")
 
 
 def show_agent_done(name: str, turns: int, elapsed: float) -> None:
     icon = _AGENT_ICON.get(name, "🤖")
-    print(
-        f"  {_GREEN}✓{_R} {_BOLD}{name}{_R} done"
-        f"  {_DIM}{turns} turns  {elapsed:.1f}s{_R}\n",
-        flush=True,
-    )
+    info(f"  {_GREEN}✓{_R} {_BOLD}{name}{_R} done  {_DIM}{turns} turns  {elapsed:.1f}s{_R}")
 
 
 class timer:
