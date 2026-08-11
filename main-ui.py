@@ -155,6 +155,19 @@ logger.info(
 )
 
 
+def _title_info_block(file_title: str | None) -> str:
+    """Design 에이전트 instruction에 덧붙여 첫 페이지(커버) 제목 자리를 채우는 지시문.
+    file_title이 주어지면 그 값을 그대로 쓰라고 지시하고, 없으면 아무 지시도 추가하지 않아
+    에이전트가 매뉴스크립트 내용을 보고 스스로 제목을 정하던 기존 동작을 그대로 둔다."""
+    if not file_title:
+        return ""
+    return (
+        "Cover slide (slide_01) title: use exactly this text as the presentation's main title — "
+        "do not invent, translate, shorten, or otherwise modify it:\n"
+        f"{file_title}"
+    )
+
+
 def _cover_info_block(presenter_name: str, emp_no: str, team_name: str) -> str:
     """Design 에이전트 instruction에 덧붙여 첫 페이지(커버)의 팀명/이름(사번)/날짜 자리를 채우는 지시문.
     날짜는 요청을 받은 시점의 날짜를 'YY.MM.DD' 형식(예: 26.07.20)으로 사용한다."""
@@ -606,6 +619,7 @@ async def template_based_ppt_generation(
     emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
+    file_title: str | None = Form(default=None, description="첫 슬라이드(커버) 제목으로 쓸 텍스트. 미입력 시 LLM이 매뉴스크립트 내용을 보고 스스로 제목을 정함. export_filename(저장 파일명)과는 무관"),
     reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
@@ -631,6 +645,8 @@ async def template_based_ppt_generation(
         f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
         f"\n\n{_reference_info_block(reference_file_name)}"
     )
+    if file_title:
+        design_instruction += f"\n\n{_title_info_block(file_title)}"
     design_result = await _run_design_hynix_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
     )
@@ -647,6 +663,7 @@ async def template_free_ppt_generation(
     emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
+    file_title: str | None = Form(default=None, description="첫 슬라이드(커버) 제목으로 쓸 텍스트. 미입력 시 LLM이 매뉴스크립트 내용을 보고 스스로 제목을 정함. export_filename(저장 파일명)과는 무관"),
     reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
@@ -672,6 +689,8 @@ async def template_free_ppt_generation(
         f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
         f"\n\n{_reference_info_block(reference_file_name)}"
     )
+    if file_title:
+        design_instruction += f"\n\n{_title_info_block(file_title)}"
     design_result = await _run_design_free_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
     )
@@ -688,6 +707,7 @@ async def template_based_ppt_generation_db(
     emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
+    file_title: str | None = Form(default=None, description="첫 슬라이드(커버) 제목으로 쓸 텍스트. 미입력 시 LLM이 매뉴스크립트 내용을 보고 스스로 제목을 정함. export_filename(저장 파일명)과는 무관"),
     reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
@@ -749,6 +769,8 @@ async def template_based_ppt_generation_db(
         f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
         f"\n\n{_reference_info_block(reference_file_name)}"
     )
+    if file_title:
+        design_instruction += f"\n\n{_title_info_block(file_title)}"
     design_result = await _run_design_hynix_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
     )
@@ -765,6 +787,7 @@ async def template_free_ppt_generation_db(
     emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
+    file_title: str | None = Form(default=None, description="첫 슬라이드(커버) 제목으로 쓸 텍스트. 미입력 시 LLM이 매뉴스크립트 내용을 보고 스스로 제목을 정함. export_filename(저장 파일명)과는 무관"),
     reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
@@ -826,6 +849,8 @@ async def template_free_ppt_generation_db(
         f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
         f"\n\n{_reference_info_block(reference_file_name)}"
     )
+    if file_title:
+        design_instruction += f"\n\n{_title_info_block(file_title)}"
     design_result = await _run_design_free_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
     )
