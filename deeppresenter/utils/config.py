@@ -122,6 +122,7 @@ class DeepPresenterConfig(BaseModel):
     research_agent: LLM
     design_agent: LLM
     long_context_model: LLM
+    vlm_agent: LLM | None = None
     context_window: int = 200_000
     max_context_folds: int = 3
     context_folding: bool = False

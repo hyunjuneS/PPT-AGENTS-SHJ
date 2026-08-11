@@ -21,7 +21,7 @@ from deeppresenter.graph.engine import build_graph
 from deeppresenter.graph.llm_adapter import to_chat_openai
 from deeppresenter.graph.tools import build_tools_for_role
 from deeppresenter.utils.config import DeepPresenterConfig
-from deeppresenter.utils.constants import CONTEXT_MODE_PROMPT, OFFLINE_PROMPT, PACKAGE_DIR
+from deeppresenter.utils.constants import CONTEXT_MODE_PROMPT, HEAVY_REFLECT, OFFLINE_PROMPT, PACKAGE_DIR
 from deeppresenter.utils.log import show_agent_start
 from deeppresenter.utils.typings import InputRequest, RoleConfig
 
@@ -146,12 +146,17 @@ async def run_design_graph(
     llm = config[role_config.use_model]
     chat_model = to_chat_openai(llm)
 
+    # HEAVY_REFLECT일 때만 별도 VLM 모델을 inspect_slide에 바인딩한다 — Design 에이전트 자신의
+    # chat_model(llm, 위)은 이미지를 받지 않고, VLM이 돌려준 텍스트 겹침 리뷰만 전달받는다.
+    vlm_llm = config.vlm_agent if HEAVY_REFLECT else None
+
     async with AgentEnv(workspace) as env:
         tools = build_tools_for_role(
             role_config,
             env._tools_dict,
             env._server_tools,
             finalize_overrides={"agent_name": "Design"},
+            vlm_llm=vlm_llm,
         )
         tool_names = [t.name for t in tools]
 

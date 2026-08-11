@@ -78,10 +78,19 @@ def _tier_base_url(model_size: str) -> str:
     )
 
 
+def _vlm_base_url() -> str:
+    return (
+        os.environ.get("VLM_MODEL_URL")
+        or os.environ.get("OPENAI_BASE_URL")
+        or _DEFAULT_BASE_URL
+    )
+
+
 # Research/Design 단계에 별도 instruction을 받지 않는 엔드포인트에서 사용하는 고정 지시문.
 _RESEARCH_DEFAULT_INSTRUCTION = "Create presentation content based on the attached document."
 _DESIGN_DEFAULT_INSTRUCTION = "Create a professional presentation."
 
+# research/design 에이전트 공통 기본 모델 — MODEL_BIG/MIDDLE/SMALL 티어만 쓰며 VLM과는 무관.
 _llm = AsyncLLM(
     model=os.environ.get("MODEL_BIG", "claude-opus-4-5"),
     base_url=_tier_base_url("big"),
@@ -89,36 +98,43 @@ _llm = AsyncLLM(
     timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
 )
 
-# Design 에이전트 전용 모델 (VLM) — DESIGN_MODEL_NAME이 없으면 기본 모델 사용.
-# API 키는 VLM_API_KEY가 있으면 사용하고, 없으면 OPENAI_API_KEY로 폴백한다.
-_design_llm = AsyncLLM(
-    model=os.environ.get("DESIGN_MODEL_NAME") or os.environ.get("MODEL_BIG", "claude-opus-4-5"),
-    base_url=_tier_base_url("big"),
-    api_key=os.environ.get("VLM_API_KEY") or os.environ.get("OPENAI_API_KEY", ""),
-    timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
+# Heavy-reflect 전용 VLM 모델 — inspect_slide가 이 모델에만 별도로 이미지를 보내 겹침 여부를
+# 검토받는다(Design 에이전트 본체는 이 모델을 쓰지 않고, 텍스트 리뷰 결과만 전달받음).
+# VLM_MODEL_NAME 미설정 시 None — HEAVY_REFLECT=1인데 이게 없으면 기동 시점에 에러로 막는다.
+_vlm_llm = (
+    AsyncLLM(
+        model=os.environ["VLM_MODEL_NAME"],
+        base_url=_vlm_base_url(),
+        api_key=os.environ.get("VLM_API_KEY") or os.environ.get("OPENAI_API_KEY", ""),
+        timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
+    )
+    if os.environ.get("VLM_MODEL_NAME")
+    else None
 )
 
 # PPT_LANGUAGE env — 출력 언어 고정. 값: "en" (기본) 또는 "ko".
 _LANGUAGE: str = os.environ.get("PPT_LANGUAGE", "en")
 
-logger.info("LLM configured: research=%s  design=%s  language=%s",
-            _llm, _design_llm, _LANGUAGE)
+logger.info("LLM configured: research=design=%s  vlm=%s  language=%s",
+            _llm, _vlm_llm, _LANGUAGE)
 
 
 def _make_deep_config(research_llm=None, design_llm=None):
     """DeepPresenterConfig을 생성. research_llm/design_llm을 넘기면 해당 티어로
-    선택된 LLM을 쓰고, 안 넘기면 기존처럼 정적 글로벌(_llm/_design_llm)에서 만든다."""
+    선택된 LLM을 쓰고, 안 넘기면 정적 글로벌(_llm)에서 만든다. vlm_agent는 항상 전역
+    _vlm_llm(VLM_MODEL_NAME 기반, 티어 개념 없음)에서 만든다."""
     from deeppresenter.utils.config import DeepPresenterConfig, LLM
 
     def _to_deep_llm(llm: AsyncLLM) -> LLM:
         return LLM(model=llm.model, base_url=llm.base_url, api_key=llm.api_key)
 
     r = research_llm or _to_deep_llm(_llm)
-    d = design_llm or _to_deep_llm(_design_llm)
+    d = design_llm or _to_deep_llm(_llm)
     return DeepPresenterConfig(
         research_agent=r,
         design_agent=d,
         long_context_model=r,
+        vlm_agent=_to_deep_llm(_vlm_llm) if _vlm_llm else None,
     )
 
 
@@ -133,8 +149,7 @@ _MODEL_TIER_ENV = {"big": "MODEL_BIG", "middle": "MODEL_MIDDLE", "small": "MODEL
 def _build_tier_llm(model_size: str) -> LLM | None:
     model_name = os.environ.get(_MODEL_TIER_ENV[model_size])
     if not model_name and model_size == "big":
-        # MODEL_BIG 미설정 시 DESIGN_MODEL_NAME → 기본값으로 폴백
-        model_name = os.environ.get("DESIGN_MODEL_NAME") or "claude-opus-4-5"
+        model_name = "claude-opus-4-5"
     if not model_name:
         return None
 
@@ -870,9 +885,9 @@ if __name__ == "__main__":
         print("error: OPENAI_API_KEY is required (set in .env or environment)", file=sys.stderr)
         sys.exit(1)
 
-    heavy_reflect = os.environ.get("DEEPPRESENTER_HEAVY_REFLECT", "").lower() in ("1", "true", "yes")
-    if heavy_reflect and not os.environ.get("DESIGN_MODEL_NAME"):
-        print("error: DESIGN_MODEL_NAME is required when DEEPPRESENTER_HEAVY_REFLECT is set", file=sys.stderr)
+    heavy_reflect = os.environ.get("HEAVY_REFLECT", "").lower() in ("1", "true", "yes")
+    if heavy_reflect and not os.environ.get("VLM_MODEL_NAME"):
+        print("error: VLM_MODEL_NAME is required when HEAVY_REFLECT is set", file=sys.stderr)
         sys.exit(1)
 
     # 경로 검증
@@ -887,10 +902,11 @@ if __name__ == "__main__":
     reload    = os.environ.get("RELOAD", "true").lower() not in ("0", "false", "no")
     log_level = os.environ.get("LOG_LEVEL", "info")
 
-    logger.info("LLM  : model=%s  vlm=%s  url=%s",
+    logger.info("LLM  : model=%s  vlm=%s  url=%s  vlm_url=%s",
                 os.environ.get("MODEL_BIG", "claude-opus-4-5"),
-                os.environ.get("DESIGN_MODEL_NAME", "(none)"),
-                os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL)
+                os.environ.get("VLM_MODEL_NAME", "(none)"),
+                os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL,
+                _vlm_base_url() if os.environ.get("VLM_MODEL_NAME") else "(none)")
     logger.info("Server: host=%s port=%d reload=%s log_level=%s", host, port, reload, log_level)
 
     uvicorn.run(

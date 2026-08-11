@@ -6,7 +6,7 @@ from pathlib import Path
 PACKAGE_DIR = Path(__file__).parent.parent
 
 LOGGING_LEVEL = int(os.getenv("DEEPPRESENTER_LOG_LEVEL", logging.INFO))
-HEAVY_REFLECT = os.getenv("DEEPPRESENTER_HEAVY_REFLECT", "").lower() in ("1", "true", "yes")
+HEAVY_REFLECT = os.getenv("HEAVY_REFLECT", "").lower() in ("1", "true", "yes")
 
 RETRY_TIMES = int(os.getenv("RETRY_TIMES", 3))
 TOOL_CUTOFF_LEN = int(os.getenv("TOOL_CUTOFF_LEN", 4096))

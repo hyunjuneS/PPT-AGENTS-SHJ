@@ -73,6 +73,7 @@ def build_tools_for_role(
     server_tools: dict[str, list[str]],
     finalize_overrides: dict[str, Any] | None = None,
     llm: Any | None = None,
+    vlm_llm: Any | None = None,
 ) -> list[StructuredTool]:
     """finalize_overrides lets the caller bind e.g. agent_name="Design" onto the
     finalize tool at construction time (mirrors the old engine's post-hoc
@@ -83,7 +84,12 @@ def build_tools_for_role(
     review runs on the exact same model/base_url/api_key the calling role's own
     chat_model uses, not a separately-configured one. inspect_content also always
     gets a fresh InspectContentLimiter bound here (one per build_tools_for_role
-    call, i.e. per agent run) so it can't be called an unbounded number of times."""
+    call, i.e. per agent run) so it can't be called an unbounded number of times.
+
+    vlm_llm, if given, is bound onto inspect_slide's HEAVY_REFLECT overlap check —
+    a separate, dedicated vision model requested independently of the role's own
+    chat_model, so the agent that writes the HTML never itself needs to be
+    vision-capable."""
     specs = resolve_toolset(role_config.toolset, tools_dict, server_tools)
 
     structured_tools: list[StructuredTool] = []
@@ -98,6 +104,8 @@ def build_tools_for_role(
             if llm is not None:
                 overrides["llm"] = llm
             func = _bind_kwargs(raw_func, **overrides)
+        elif name == "inspect_slide" and vlm_llm is not None:
+            func = _bind_kwargs(raw_func, vlm_llm=vlm_llm)
 
         args_model = _build_args_model(spec, raw_func)
         kwargs: dict[str, Any] = dict(

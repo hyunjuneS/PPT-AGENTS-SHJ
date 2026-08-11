@@ -434,6 +434,36 @@ def _default_llm():
     )
 
 
+# ── inspect_slide's VLM overlap review ──────────────────────────────────────
+
+# Fallback only — used if inspect_slide is ever invoked without a `vlm_llm` bound
+# to it. The graph engine always binds config.vlm_agent (VLM_MODEL_NAME/VLM_MODEL_URL)
+# instead (see build_tools_for_role in deeppresenter/graph/tools.py).
+def _default_vlm_llm():
+    from deeppresenter.utils.config import LLM
+    return LLM(
+        model=os.environ.get("VLM_MODEL_NAME", ""),
+        base_url=os.environ.get("VLM_MODEL_URL") or os.environ.get("OPENAI_BASE_URL") or _FALLBACK_BASE_URL,
+        api_key=os.environ.get("VLM_API_KEY") or os.environ.get("OPENAI_API_KEY", ""),
+    )
+
+
+_VLM_OVERLAP_SYSTEM_PROMPT = (
+    "You are a meticulous visual QA reviewer for presentation slides. You will be shown a "
+    "rendered screenshot of one slide. Your ONLY job is to detect visual overlap between "
+    "elements — do not evaluate aesthetics, layout balance, font choices, spacing, or "
+    "overflow (overflow is already verified separately by a deterministic size check, not by "
+    "you). Overlap means any text, image, shape, or chart placeholder box (dashed border, "
+    "labeled '[CHART: <type>]') that visually overlaps another text, image, or shape."
+)
+
+_VLM_OVERLAP_USER_PROMPT = (
+    "Review the attached slide screenshot for element overlap only. "
+    "If any element overlaps another, describe exactly which elements overlap and roughly "
+    "where on the slide. If no element overlaps another, respond with exactly: No overlap detected."
+)
+
+
 def _truncate(text: str, max_chars: int) -> str:
     text = text.strip()
     if len(text) <= max_chars:
@@ -551,14 +581,17 @@ INSPECT_CONTENT_SPEC = {
 async def inspect_slide(
     html_file: str,
     aspect_ratio: str = "16:9",
-) -> str | list:
+    vlm_llm=None,
+) -> str:
     """
     Validate an HTML slide file.
     Structural checks first (text-based), then a deterministic content-overflow
     check via a real browser render (scrollWidth/scrollHeight vs the fixed body
     size — this catches overflow even though `overflow:hidden` clips it invisibly
-    in any screenshot). If HEAVY_REFLECT is enabled, also returns the rendered
-    image for visual VLM review.
+    in any screenshot). If HEAVY_REFLECT is enabled, the rendered image is also
+    sent as a standalone request to a dedicated VLM (vlm_llm, or VLM_MODEL_NAME by
+    default) to check for element overlap — the calling agent's own model never
+    sees the image itself, only the VLM's text verdict.
     """
     path = Path(html_file)
     assert path.exists() and path.suffix == ".html", \
@@ -627,28 +660,36 @@ async def inspect_slide(
                 "fits within the fixed body bounds, then call inspect_slide again."
             )
 
-    # overflow 없음 — heavy_reflect 모드면 방금 찍은 렌더링 이미지를 VLM 검토용으로 반환
-    if HEAVY_REFLECT:
-        if img_bytes:
-            b64 = base64.b64encode(img_bytes).decode()
-            return [
-                {
-                    "type": "text",
-                    "text": (
-                        "Slide structure is valid. "
-                        "Review the rendered image below for visual quality "
-                        "(layout balance, font readability, overflow, spacing, aesthetics), "
-                        "and explicitly check for overlap: does any element — including a chart "
-                        "placeholder box (dashed border, labeled '[CHART: <type>]') — visually "
-                        "overlap another text, image, or shape? "
-                        "If improvements are needed, rewrite the HTML and call inspect_slide again."
-                    ),
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
-                },
-            ]
+    # overflow 없음 — heavy_reflect 모드면 방금 찍은 렌더링 이미지를 별도의 VLM 요청으로 보내
+    # 겹침 여부만 검토받는다. 이 결과(텍스트)만 Design 에이전트에게 돌아가며, 이미지 자체는
+    # Design 에이전트의 대화에 절대 실리지 않는다 — VLM 요청과 Design 에이전트의 요청은 완전히
+    # 분리되어 있으므로, Design 에이전트가 어떤 모델을 쓰든(vision 지원 여부와 무관) 항상 동작한다.
+    if HEAVY_REFLECT and img_bytes:
+        llm = vlm_llm or _default_vlm_llm()
+        b64 = base64.b64encode(img_bytes).decode()
+        messages = [
+            {"role": "system", "content": _VLM_OVERLAP_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": _VLM_OVERLAP_USER_PROMPT},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                ],
+            },
+        ]
+        response = await llm.run(messages=messages)
+        review = (response.choices[0].message.content or "").strip()
+
+        if "no overlap" in review.lower():
+            return f"Slide is valid. ({len(content)} chars, aspect_ratio={aspect_ratio}) VLM overlap review: {review}"
+
+        return (
+            "Issues found (VLM overlap review):\n"
+            f"- {review}\n"
+            "Fix this only by resizing, repositioning, or reflowing the overlapping elements — "
+            "never remove, shorten, or simplify text content to resolve it (always preserve the "
+            "manuscript's content density). Then call inspect_slide again."
+        )
 
     return f"Slide is valid. ({len(content)} chars, aspect_ratio={aspect_ratio})"
 
