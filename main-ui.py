@@ -575,7 +575,7 @@ async def download_separated_html(
     모두 모아 zip으로 묶어 다운로드."""
     from starlette.background import BackgroundTask
 
-    from deeppresenter.tools.storage import download_html_files
+    from deeppresenter.tools.storage import _filename_stem, download_html_files
 
     try:
         local_path, prefix = download_html_files(emp_no, export_filename)
@@ -585,7 +585,7 @@ async def download_separated_html(
         logger.error("[DownloadSeparatedHtml] MinIO download failed: %s", e)
         raise HTTPException(status_code=500, detail=f"MinIO download failed: {e}")
 
-    zip_filename = f"{Path(prefix.rstrip('/')).name}.zip"
+    zip_filename = f"{_filename_stem(export_filename)}.zip"
     return FileResponse(
         path=local_path,
         media_type="application/zip",
@@ -605,6 +605,7 @@ async def download_combined_html(
     참조하므로 이미지 없이 combined.html만 받으면 렌더링이 깨진다."""
     from starlette.background import BackgroundTask
 
+    from deeppresenter.tools.storage import _filename_stem
     from deeppresenter.tools.storage import download_combined_html as fetch_combined_html
 
     try:
@@ -615,7 +616,7 @@ async def download_combined_html(
         logger.error("[DownloadCombinedHtml] MinIO download failed: %s", e)
         raise HTTPException(status_code=500, detail=f"MinIO download failed: {e}")
 
-    zip_filename = f"{Path(prefix.rstrip('/')).name}.zip"
+    zip_filename = f"{_filename_stem(export_filename)}.zip"
     return FileResponse(
         path=local_path,
         media_type="application/zip",
