@@ -1,10 +1,20 @@
 """생성된 PPTX/HTML 슬라이드를 MinIO 오브젝트 스토리지에 업로드/다운로드.
 
-한 번의 생성 요청이 만든 산출물은 전부 '{emp_no}/{export_filename stem}/' 아래
-카테고리별 하위 폴더에 모인다:
+경로 체계 두 가지가 공존한다:
+
+1. artifact_id 기반 (upload_*_by_artifact — main-ui.py의 4개 PPT 생성 엔드포인트가 사용):
+   '{emp_no}/slide/{artifact_id}/' 아래 카테고리별 하위 폴더에 모인다.
+2. export_filename 기반 (upload_pptx/upload_html_files/upload_combined_html,
+   download_* 전체 — main-ui.py의 dev 태그 다운로드 엔드포인트가 사용):
+   '{emp_no}/{export_filename stem}/' 아래 카테고리별 하위 폴더에 모인다.
+
+두 체계 모두 카테고리 폴더 구성은 동일하다:
   - ppt/            : PPTX 파일 1개
   - htmls/          : 슬라이드 html N개 + global.css + 로컬 이미지 (개별 파일)
   - combined_html/  : 합쳐진 스크롤 html + 그 로컬 이미지 (개별 파일)
+
+주의: dev 다운로드 엔드포인트는 여전히 export_filename 기반 경로만 조회하므로,
+artifact_id 기반으로 업로드된 산출물은 그 엔드포인트들로 찾을 수 없다.
 """
 
 import logging
@@ -149,6 +159,64 @@ def upload_combined_html(local_files: list[str], emp_no: str, export_filename: s
     스타일을 가져오고 이미지도 상대경로 그대로이므로, global.css와 이미지들이 combined.html과
     같은 폴더에 함께 있어야 정상적으로 렌더링된다. 반환값은 업로드된 오브젝트 이름 목록."""
     return _upload_files_under_prefix(local_files, emp_no, export_filename, category="combined_html")
+
+
+def _artifact_prefix(emp_no: str, artifact_id: str) -> str:
+    return f"{emp_no}/slide/{artifact_id}"
+
+
+def upload_pptx_by_artifact(local_path: str, emp_no: str, artifact_id: str) -> str:
+    """local_path의 PPTX 파일을 MinIO에 '{emp_no}/slide/{artifact_id}/ppt/{artifact_id}.pptx'로 업로드.
+    같은 artifact_id로 이미 올라간 파일이 있으면 덮어쓴다(artifact_id는 호출부가 이미 고유하게
+    관리하는 값이라고 가정 — upload_pptx처럼 '_(1)' 접미사로 충돌을 피하지 않는다).
+
+    반환값은 업로드된 오브젝트 이름(버킷 내 경로).
+    """
+    bucket = os.environ["MINIO_FILE_BUCKET"]
+    client = _get_client()
+    if not client.bucket_exists(bucket):
+        client.make_bucket(bucket)
+
+    object_name = f"{_artifact_prefix(emp_no, artifact_id)}/ppt/{artifact_id}.pptx"
+    client.fput_object(bucket, object_name, local_path, content_type=PPTX_CONTENT_TYPE)
+    logger.info("[MinIO] uploaded %s -> %s/%s", local_path, bucket, object_name)
+    return object_name
+
+
+def _upload_files_under_artifact_prefix(local_files: list[str], emp_no: str, artifact_id: str, category: str) -> list[str]:
+    """local_files를 MinIO에 '{emp_no}/slide/{artifact_id}/{category}/{원본 파일명}'으로 각각
+    개별 업로드. 반환값은 업로드된 오브젝트 이름 목록."""
+    if not local_files:
+        return []
+
+    bucket = os.environ["MINIO_FILE_BUCKET"]
+    client = _get_client()
+    if not client.bucket_exists(bucket):
+        client.make_bucket(bucket)
+
+    prefix = f"{_artifact_prefix(emp_no, artifact_id)}/{category}"
+    object_names = []
+    for f in (Path(f) for f in local_files):
+        object_name = f"{prefix}/{f.name}"
+        client.fput_object(bucket, object_name, str(f), content_type=_content_type_for(f))
+        object_names.append(object_name)
+
+    logger.info("[MinIO] uploaded %d file(s) -> %s/%s/", len(object_names), bucket, prefix)
+    return object_names
+
+
+def upload_html_files_by_artifact(local_files: list[str], emp_no: str, artifact_id: str) -> list[str]:
+    """슬라이드 html N개 + global.css + 로컬 이미지(local_files)를 MinIO에
+    '{emp_no}/slide/{artifact_id}/htmls/{원본 파일명}'으로 각각 개별 업로드.
+    반환값은 업로드된 오브젝트 이름 목록."""
+    return _upload_files_under_artifact_prefix(local_files, emp_no, artifact_id, category="htmls")
+
+
+def upload_combined_html_by_artifact(local_files: list[str], emp_no: str, artifact_id: str) -> list[str]:
+    """세로로 스크롤 가능하게 합쳐진 combined.html + 그 안에서 상대경로로 참조하는 global.css/
+    로컬 이미지(local_files)를 MinIO에 '{emp_no}/slide/{artifact_id}/combined_html/{원본 파일명}'
+    으로 각각 개별 업로드. 반환값은 업로드된 오브젝트 이름 목록."""
+    return _upload_files_under_artifact_prefix(local_files, emp_no, artifact_id, category="combined_html")
 
 
 def download_pptx(emp_no: str, export_filename: str) -> tuple[str, str]:

@@ -298,7 +298,7 @@ def _resolve_tiered_llm(
     return base.model_copy(update=updates)
 
 
-async def _design_response(result, session_id: str, export_filename: str, emp_no: str):
+async def _design_response(result, session_id: str, artifact_id: str, emp_no: str):
     """Shared response-building for the Design endpoints.
 
     Converts the generated slides to PPTX in the same request (same replica)
@@ -308,13 +308,15 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
     fail with "slides_dir not found" even though the files genuinely exist,
     just on another replica's local disk.
 
-    Uploads three artifacts to MinIO, all under "{emp_no}/{export_filename stem}/":
-    - the PPTX at ".../ppt/{export_filename stem}.pptx"
+    Uploads three artifacts to MinIO, all under "{emp_no}/slide/{artifact_id}/":
+    - the PPTX at ".../ppt/{artifact_id}.pptx"
     - every slide_*.html + global.css + any local image (e.g. the hynix cover logo) individually
       at ".../htmls/..."
     - the scrollable combined HTML + global.css + those same local images at ".../combined_html/...".
       Each slide inside combined.html still references global.css via its own <link>, so global.css
       must ship alongside it too, or every slide renders unstyled.
+
+    The returned PPTX's filename is also derived from artifact_id ("{artifact_id}.pptx").
 
     Before any of that, injects a small JS/SVG chart-rendering script into any slide_*.html that
     has a data-chart-type element, so the chart is actually visible when viewing the html/combined
@@ -322,13 +324,18 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
     div itself was otherwise empty in plain HTML).
     """
     from deeppresenter.tools.export import combine_html_slides, html_slides_to_pptx, inject_chart_rendering
-    from deeppresenter.tools.storage import upload_combined_html, upload_html_files, upload_pptx
+    from deeppresenter.tools.storage import (
+        upload_combined_html_by_artifact,
+        upload_html_files_by_artifact,
+        upload_pptx_by_artifact,
+    )
 
     slides_dir = result.slides_dir
     inject_chart_rendering(slides_dir)
     html_files = sorted(Path(slides_dir).glob("slide_*.html"))
 
-    pptx_path = Path(slides_dir) / export_filename
+    pptx_filename = f"{artifact_id}.pptx"
+    pptx_path = Path(slides_dir) / pptx_filename
     try:
         await html_slides_to_pptx(
             slides_dir=slides_dir,
@@ -341,7 +348,7 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
         raise HTTPException(status_code=500, detail=f"Export failed: {e}")
 
     try:
-        object_name = upload_pptx(str(pptx_path), emp_no, export_filename)
+        object_name = upload_pptx_by_artifact(str(pptx_path), emp_no, artifact_id)
     except Exception as e:
         logger.error("[Design] MinIO upload failed: %s", e)
         raise HTTPException(status_code=500, detail=f"MinIO upload failed: {e}")
@@ -355,7 +362,7 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
     if css_path.exists():
         html_bundle_files.append(str(css_path))
     try:
-        htmls_object_names = upload_html_files(html_bundle_files, emp_no, export_filename)
+        htmls_object_names = upload_html_files_by_artifact(html_bundle_files, emp_no, artifact_id)
     except Exception as e:
         logger.error("[Design] MinIO htmls upload failed: %s", e)
         raise HTTPException(status_code=500, detail=f"MinIO htmls upload failed: {e}")
@@ -366,7 +373,7 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
         combined_bundle_files = [str(combined_path)] + [str(p) for p in image_files]
         if css_path.exists():
             combined_bundle_files.append(str(css_path))
-        combined_object_names = upload_combined_html(combined_bundle_files, emp_no, export_filename)
+        combined_object_names = upload_combined_html_by_artifact(combined_bundle_files, emp_no, artifact_id)
     except Exception as e:
         logger.error("[Design] MinIO combined html upload failed: %s", e)
         raise HTTPException(status_code=500, detail=f"MinIO combined html upload failed: {e}")
@@ -374,7 +381,7 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
     return FileResponse(
         path=str(pptx_path),
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        filename=export_filename,
+        filename=pptx_filename,
         headers={
             "X-Session-Id": session_id,
             "X-Slides-Dir": slides_dir,
@@ -631,11 +638,11 @@ async def template_based_ppt_generation(
     file: UploadFile = File(...),
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
-    export_filename: str = Form(default="slides.pptx"),
-    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    artifact_id: str = Form(..., description="산출물 식별자. 생성되는 PPTX 파일명('{artifact_id}.pptx')과 MinIO 저장 경로('{emp_no}/slide/{artifact_id}/ppt|htmls|combined_html/...')에 사용됨."),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{artifact_id}/...'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
-    file_title: str | None = Form(default=None, description="첫 슬라이드(커버) 제목으로 쓸 텍스트. 미입력 시 LLM이 매뉴스크립트 내용을 보고 스스로 제목을 정함. export_filename(저장 파일명)과는 무관"),
+    file_title: str | None = Form(default=None, description="첫 슬라이드(커버) 제목으로 쓸 텍스트. 미입력 시 LLM이 매뉴스크립트 내용을 보고 스스로 제목을 정함. artifact_id(저장 파일명)와는 무관"),
     reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
@@ -667,7 +674,7 @@ async def template_based_ppt_generation(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
     )
 
-    return await _design_response(design_result, session_id, export_filename, emp_no)
+    return await _design_response(design_result, session_id, artifact_id, emp_no)
 
 
 @app.post("/template-free-ppt-generation", tags=["main"], summary="Template-Free-PPT-Generation")
@@ -675,11 +682,11 @@ async def template_free_ppt_generation(
     file: UploadFile = File(...),
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
-    export_filename: str = Form(default="slides.pptx"),
-    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    artifact_id: str = Form(..., description="산출물 식별자. 생성되는 PPTX 파일명('{artifact_id}.pptx')과 MinIO 저장 경로('{emp_no}/slide/{artifact_id}/ppt|htmls|combined_html/...')에 사용됨."),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{artifact_id}/...'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
-    file_title: str | None = Form(default=None, description="첫 슬라이드(커버) 제목으로 쓸 텍스트. 미입력 시 LLM이 매뉴스크립트 내용을 보고 스스로 제목을 정함. export_filename(저장 파일명)과는 무관"),
+    file_title: str | None = Form(default=None, description="첫 슬라이드(커버) 제목으로 쓸 텍스트. 미입력 시 LLM이 매뉴스크립트 내용을 보고 스스로 제목을 정함. artifact_id(저장 파일명)와는 무관"),
     reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
@@ -711,7 +718,7 @@ async def template_free_ppt_generation(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
     )
 
-    return await _design_response(design_result, session_id, export_filename, emp_no)
+    return await _design_response(design_result, session_id, artifact_id, emp_no)
 
 
 @app.post("/template-based-ppt-generation-db", tags=["main"], summary="Template-Based-PPT-Generation-DB")
@@ -719,11 +726,11 @@ async def template_based_ppt_generation_db(
     ids: list[str] = Form(..., description="sources 테이블에서 raw_text를 조회할 id 목록 (여러 개 전달 가능)"),
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
-    export_filename: str = Form(default="slides.pptx"),
-    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    artifact_id: str = Form(..., description="산출물 식별자. 생성되는 PPTX 파일명('{artifact_id}.pptx')과 MinIO 저장 경로('{emp_no}/slide/{artifact_id}/ppt|htmls|combined_html/...')에 사용됨."),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{artifact_id}/...'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
-    file_title: str | None = Form(default=None, description="첫 슬라이드(커버) 제목으로 쓸 텍스트. 미입력 시 LLM이 매뉴스크립트 내용을 보고 스스로 제목을 정함. export_filename(저장 파일명)과는 무관"),
+    file_title: str | None = Form(default=None, description="첫 슬라이드(커버) 제목으로 쓸 텍스트. 미입력 시 LLM이 매뉴스크립트 내용을 보고 스스로 제목을 정함. artifact_id(저장 파일명)와는 무관"),
     reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
@@ -791,7 +798,7 @@ async def template_based_ppt_generation_db(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
     )
 
-    return await _design_response(design_result, session_id, export_filename, emp_no)
+    return await _design_response(design_result, session_id, artifact_id, emp_no)
 
 
 @app.post("/template-free-ppt-generation-db", tags=["main"], summary="Template-Free-PPT-Generation-DB")
@@ -799,11 +806,11 @@ async def template_free_ppt_generation_db(
     ids: list[str] = Form(..., description="sources 테이블에서 raw_text를 조회할 id 목록 (여러 개 전달 가능)"),
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
-    export_filename: str = Form(default="slides.pptx"),
-    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    artifact_id: str = Form(..., description="산출물 식별자. 생성되는 PPTX 파일명('{artifact_id}.pptx')과 MinIO 저장 경로('{emp_no}/slide/{artifact_id}/ppt|htmls|combined_html/...')에 사용됨."),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{artifact_id}/...'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
-    file_title: str | None = Form(default=None, description="첫 슬라이드(커버) 제목으로 쓸 텍스트. 미입력 시 LLM이 매뉴스크립트 내용을 보고 스스로 제목을 정함. export_filename(저장 파일명)과는 무관"),
+    file_title: str | None = Form(default=None, description="첫 슬라이드(커버) 제목으로 쓸 텍스트. 미입력 시 LLM이 매뉴스크립트 내용을 보고 스스로 제목을 정함. artifact_id(저장 파일명)와는 무관"),
     reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
@@ -871,7 +878,7 @@ async def template_free_ppt_generation_db(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
     )
 
-    return await _design_response(design_result, session_id, export_filename, emp_no)
+    return await _design_response(design_result, session_id, artifact_id, emp_no)
 
 
 # ---------------------------------------------------------------------------
