@@ -316,7 +316,10 @@ async def _design_response(result, session_id: str, artifact_id: str, emp_no: st
       Each slide inside combined.html still references global.css via its own <link>, so global.css
       must ship alongside it too, or every slide renders unstyled.
 
-    The returned PPTX's filename is also derived from artifact_id ("{artifact_id}.pptx").
+    The returned PPTX's filename is also derived from artifact_id ("{artifact_id}.pptx"). If that
+    artifact_id already has a PPTX at that path in MinIO, a '_(1)', '_(2)', ... suffix is appended
+    until a free one is found (resolved once, then reused for all three uploads + the filename below
+    — so ppt/htmls/combined_html always end up under the same final artifact_id folder).
 
     Before any of that, injects a small JS/SVG chart-rendering script into any slide_*.html that
     has a data-chart-type element, so the chart is actually visible when viewing the html/combined
@@ -325,10 +328,13 @@ async def _design_response(result, session_id: str, artifact_id: str, emp_no: st
     """
     from deeppresenter.tools.export import combine_html_slides, html_slides_to_pptx, inject_chart_rendering
     from deeppresenter.tools.storage import (
+        resolve_unique_artifact_id,
         upload_combined_html_by_artifact,
         upload_html_files_by_artifact,
         upload_pptx_by_artifact,
     )
+
+    artifact_id = resolve_unique_artifact_id(emp_no, artifact_id)
 
     slides_dir = result.slides_dir
     inject_chart_rendering(slides_dir)
@@ -549,15 +555,15 @@ def app_ready():
 @app.post("/download", tags=["dev"])
 async def download_pptx(
     emp_no: str = Form(...),
-    export_filename: str = Form(..., description="MinIO에 저장된 파일명 (예: slides.pptx 또는 slides)"),
+    artifact_id: str = Form(..., description="MinIO에 저장된 산출물 식별자 (생성 시 넘긴 artifact_id)"),
 ):
-    """MinIO의 '{emp_no}/{export_filename stem}/ppt/{export_filename stem}.pptx' 오브젝트를 조회해 다운로드."""
+    """MinIO의 '{emp_no}/slide/{artifact_id}/ppt/{artifact_id}.pptx' 오브젝트를 조회해 다운로드."""
     from starlette.background import BackgroundTask
 
-    from deeppresenter.tools.storage import download_pptx as fetch_pptx
+    from deeppresenter.tools.storage import download_pptx_by_artifact as fetch_pptx
 
     try:
-        local_path, object_name = fetch_pptx(emp_no, export_filename)
+        local_path, object_name = fetch_pptx(emp_no, artifact_id)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -576,23 +582,23 @@ async def download_pptx(
 @app.post("/download-separated-html", tags=["dev"])
 async def download_separated_html(
     emp_no: str = Form(...),
-    export_filename: str = Form(..., description="MinIO에 저장된 파일명 (예: slides.pptx 또는 slides)"),
+    artifact_id: str = Form(..., description="MinIO에 저장된 산출물 식별자 (생성 시 넘긴 artifact_id)"),
 ):
-    """MinIO의 '{emp_no}/{export_filename stem}/htmls/' 아래 개별 슬라이드 html + css 파일을
+    """MinIO의 '{emp_no}/slide/{artifact_id}/htmls/' 아래 개별 슬라이드 html + css 파일을
     모두 모아 zip으로 묶어 다운로드."""
     from starlette.background import BackgroundTask
 
-    from deeppresenter.tools.storage import _filename_stem, download_html_files
+    from deeppresenter.tools.storage import download_html_files_by_artifact
 
     try:
-        local_path, prefix = download_html_files(emp_no, export_filename)
+        local_path, prefix = download_html_files_by_artifact(emp_no, artifact_id)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error("[DownloadSeparatedHtml] MinIO download failed: %s", e)
         raise HTTPException(status_code=500, detail=f"MinIO download failed: {e}")
 
-    zip_filename = f"{_filename_stem(export_filename)}.zip"
+    zip_filename = f"{artifact_id}.zip"
     return FileResponse(
         path=local_path,
         media_type="application/zip",
@@ -605,25 +611,24 @@ async def download_separated_html(
 @app.post("/download-combined-html", tags=["dev"])
 async def download_combined_html(
     emp_no: str = Form(...),
-    export_filename: str = Form(..., description="MinIO에 저장된 파일명 (예: slides.pptx 또는 slides)"),
+    artifact_id: str = Form(..., description="MinIO에 저장된 산출물 식별자 (생성 시 넘긴 artifact_id)"),
 ):
-    """MinIO의 '{emp_no}/{export_filename stem}/combined_html/' 아래 combined.html + 그 로컬 이미지
+    """MinIO의 '{emp_no}/slide/{artifact_id}/combined_html/' 아래 combined.html + 그 로컬 이미지
     (예: 하이닉스 커버 로고)를 모두 모아 zip으로 묶어 다운로드 — combined.html이 이미지를 상대경로로
     참조하므로 이미지 없이 combined.html만 받으면 렌더링이 깨진다."""
     from starlette.background import BackgroundTask
 
-    from deeppresenter.tools.storage import _filename_stem
-    from deeppresenter.tools.storage import download_combined_html as fetch_combined_html
+    from deeppresenter.tools.storage import download_combined_html_by_artifact as fetch_combined_html
 
     try:
-        local_path, prefix = fetch_combined_html(emp_no, export_filename)
+        local_path, prefix = fetch_combined_html(emp_no, artifact_id)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error("[DownloadCombinedHtml] MinIO download failed: %s", e)
         raise HTTPException(status_code=500, detail=f"MinIO download failed: {e}")
 
-    zip_filename = f"{_filename_stem(export_filename)}.zip"
+    zip_filename = f"{artifact_id}.zip"
     return FileResponse(
         path=local_path,
         media_type="application/zip",
