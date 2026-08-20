@@ -5,6 +5,7 @@
   - ppt/            : PPTX 파일 1개 ({artifact_id}.pptx)
   - htmls/          : 슬라이드 html N개 + global.css + 로컬 이미지 (개별 파일)
   - combined_html/  : 합쳐진 스크롤 html + 그 로컬 이미지 (개별 파일)
+  - pngs/           : 슬라이드별 렌더링 PNG 스크린샷 N개 (개별 파일)
 """
 
 import logging
@@ -143,6 +144,13 @@ def upload_combined_html_by_artifact(local_files: list[str], emp_no: str, artifa
     return _upload_files_under_artifact_prefix(local_files, emp_no, artifact_id, category="combined_html")
 
 
+def upload_pngs_by_artifact(local_files: list[str], emp_no: str, artifact_id: str) -> list[str]:
+    """슬라이드별 렌더링 PNG 스크린샷(local_files)을 MinIO에
+    '{emp_no}/slide/{artifact_id}/pngs/{원본 파일명}'으로 각각 개별 업로드.
+    반환값은 업로드된 오브젝트 이름 목록."""
+    return _upload_files_under_artifact_prefix(local_files, emp_no, artifact_id, category="pngs")
+
+
 def download_pptx_by_artifact(emp_no: str, artifact_id: str) -> tuple[str, str]:
     """MinIO의 '{emp_no}/slide/{artifact_id}/ppt/{artifact_id}.pptx' 오브젝트를 임시 파일로 내려받는다.
 
@@ -207,3 +215,9 @@ def download_combined_html_by_artifact(emp_no: str, artifact_id: str) -> tuple[s
     """MinIO의 '{emp_no}/slide/{artifact_id}/combined_html/' 아래 combined.html + 그 로컬
     이미지 파일을 모두 받아 하나의 zip으로 묶어 임시 파일로 반환한다."""
     return _download_files_under_artifact_prefix(emp_no, artifact_id, category="combined_html")
+
+
+def download_pngs_by_artifact(emp_no: str, artifact_id: str) -> tuple[str, str]:
+    """MinIO의 '{emp_no}/slide/{artifact_id}/pngs/' 아래 슬라이드별 PNG 스크린샷을 모두 받아
+    하나의 zip으로 묶어 임시 파일로 반환한다."""
+    return _download_files_under_artifact_prefix(emp_no, artifact_id, category="pngs")

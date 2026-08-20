@@ -29,12 +29,17 @@ def _get_chromium_executable() -> str | None:
     return None
 
 
-async def _screenshot_slide(
-    html_file: str, aspect_ratio: str = "16:9", _retry: bool = True
+async def screenshot_slide(
+    html_file: str, aspect_ratio: str = "16:9", image_format: str = "jpeg", _retry: bool = True
 ) -> tuple[bytes | None, dict | None]:
     """HTML 슬라이드를 Playwright로 렌더링.
-    (JPEG bytes, body 치수 dict{width,height,scrollWidth,scrollHeight}) 반환.
-    실패 시 (None, None).
+    (이미지 bytes, body 치수 dict{width,height,scrollWidth,scrollHeight}) 반환.
+    실패 시 (None, None). image_format은 "jpeg"(기본, VLM 검토용) 또는 "png"
+    (main-ui.py의 슬라이드 PNG 갤러리 업로드용) — screenshot.js가 출력 파일 확장자로 판단한다.
+
+    inspect_slide(VLM 겹침 검토)와 main-ui.py의 PNG 스크린샷 업로드가 공유하는 렌더링 로직 —
+    두 곳 모두 여기 하나만 거쳐가므로 차트 placeholder 시각화, 한글 폰트 폴백 등 렌더링 방식이
+    항상 동일하게 유지된다.
 
     동시 요청으로 여러 Chromium이 한꺼번에 뜨는 순간의 자원 경합 때문에 launch가
     간헐적으로 죽는 경우가 있어, 실패 시 한 번만 재시도한다.
@@ -49,7 +54,8 @@ async def _screenshot_slide(
     }
     w, h = SIZES.get(aspect_ratio, (1280, 720))
 
-    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+    suffix = ".png" if image_format == "png" else ".jpg"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
         output = f.name
 
     try:
@@ -84,7 +90,7 @@ async def _screenshot_slide(
             return Path(output).read_bytes(), dims
         warning(f"screenshot.js failed: {stdout_text}")
     except Exception as e:
-        warning(f"_screenshot_slide error: {e}")
+        warning(f"screenshot_slide error: {e}")
     finally:
         try:
             os.unlink(output)
@@ -92,8 +98,8 @@ async def _screenshot_slide(
             pass
 
     if _retry:
-        debug("Retrying _screenshot_slide once after failure")
-        return await _screenshot_slide(html_file, aspect_ratio, _retry=False)
+        debug("Retrying screenshot_slide once after failure")
+        return await screenshot_slide(html_file, aspect_ratio, image_format, _retry=False)
 
     return None, None
 
@@ -629,7 +635,7 @@ async def inspect_slide(
     # 구조 검사 통과 — 실제 브라우저 렌더링으로 overflow 여부를 결정적으로 확인.
     # overflow:hidden은 넘친 콘텐츠를 스크린샷에서 안 보이게 가리므로,
     # scrollWidth/scrollHeight로 직접 측정해야만 잡아낼 수 있다.
-    img_bytes, dims = await _screenshot_slide(html_file, aspect_ratio)
+    img_bytes, dims = await screenshot_slide(html_file, aspect_ratio)
 
     # HEAVY_REFLECT 모드면 이번 inspect_slide 호출마다(overflow로 반려되더라도) 렌더링
     # 결과를 저장한다 — edit_file → inspect_slide 반복 이력을 slide_02_01, slide_02_02...

@@ -308,8 +308,11 @@ async def _design_response(result, session_id: str, artifact_id: str, emp_no: st
     fail with "slides_dir not found" even though the files genuinely exist,
     just on another replica's local disk.
 
-    Uploads three artifacts to MinIO, all under "{emp_no}/slide/{artifact_id}/":
+    Uploads four artifacts to MinIO, all under "{emp_no}/slide/{artifact_id}/":
     - the PPTX at ".../ppt/{artifact_id}.pptx"
+    - one rendered PNG screenshot per slide_*.html at ".../pngs/..." — same Playwright rendering
+      inspect_slide's VLM review uses (chart placeholders visualized, Korean font fallback applied),
+      just as PNG instead of the JPEG inspect_slide sends to the VLM.
     - every slide_*.html + global.css + any local image (e.g. the hynix cover logo) individually
       at ".../htmls/..."
     - the scrollable combined HTML + global.css + those same local images at ".../combined_html/...".
@@ -318,21 +321,26 @@ async def _design_response(result, session_id: str, artifact_id: str, emp_no: st
 
     The returned PPTX's filename is also derived from artifact_id ("{artifact_id}.pptx"). If that
     artifact_id already has a PPTX at that path in MinIO, a '_(1)', '_(2)', ... suffix is appended
-    until a free one is found (resolved once, then reused for all three uploads + the filename below
-    — so ppt/htmls/combined_html always end up under the same final artifact_id folder).
+    until a free one is found (resolved once, then reused for all four uploads + the filename below
+    — so ppt/pngs/htmls/combined_html always end up under the same final artifact_id folder).
 
     Before any of that, injects a small JS/SVG chart-rendering script into any slide_*.html that
     has a data-chart-type element, so the chart is actually visible when viewing the html/combined
     html directly in a browser (html2pptx.js only ever turned it into a native PPTX chart — the
     div itself was otherwise empty in plain HTML).
     """
+    import shutil
+    import tempfile
+
     from deeppresenter.tools.export import combine_html_slides, html_slides_to_pptx, inject_chart_rendering
     from deeppresenter.tools.storage import (
         resolve_unique_artifact_id,
         upload_combined_html_by_artifact,
         upload_html_files_by_artifact,
+        upload_pngs_by_artifact,
         upload_pptx_by_artifact,
     )
+    from deeppresenter.tools.task import screenshot_slide
 
     artifact_id = resolve_unique_artifact_id(emp_no, artifact_id)
 
@@ -358,6 +366,26 @@ async def _design_response(result, session_id: str, artifact_id: str, emp_no: st
     except Exception as e:
         logger.error("[Design] MinIO upload failed: %s", e)
         raise HTTPException(status_code=500, detail=f"MinIO upload failed: {e}")
+
+    png_dir = Path(tempfile.mkdtemp(prefix="pptagent_pngs_"))
+    try:
+        png_files = []
+        for html_file in html_files:
+            img_bytes, _ = await screenshot_slide(str(html_file), aspect_ratio="16:9", image_format="png")
+            if img_bytes is None:
+                logger.warning("[Design] screenshot failed for %s, skipping its PNG", html_file)
+                continue
+            png_path = png_dir / f"{html_file.stem}.png"
+            png_path.write_bytes(img_bytes)
+            png_files.append(str(png_path))
+
+        try:
+            png_object_names = upload_pngs_by_artifact(png_files, emp_no, artifact_id)
+        except Exception as e:
+            logger.error("[Design] MinIO pngs upload failed: %s", e)
+            raise HTTPException(status_code=500, detail=f"MinIO pngs upload failed: {e}")
+    finally:
+        shutil.rmtree(png_dir, ignore_errors=True)
 
     css_path = Path(slides_dir) / "global.css"
     image_extensions = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")
@@ -394,6 +422,7 @@ async def _design_response(result, session_id: str, artifact_id: str, emp_no: st
             "X-Slide-Count": str(len(html_files)),
             "X-Turns": str(len(result.messages_log)),
             "X-Minio-Object": object_name,
+            "X-Minio-Pngs-Count": str(len(png_object_names)),
             "X-Minio-Htmls-Count": str(len(htmls_object_names)),
             "X-Minio-Combined-Html-Count": str(len(combined_object_names)),
         },
@@ -626,6 +655,35 @@ async def download_combined_html(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error("[DownloadCombinedHtml] MinIO download failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"MinIO download failed: {e}")
+
+    zip_filename = f"{artifact_id}.zip"
+    return FileResponse(
+        path=local_path,
+        media_type="application/zip",
+        filename=zip_filename,
+        headers={"X-Minio-Prefix": prefix},
+        background=BackgroundTask(lambda: Path(local_path).unlink(missing_ok=True)),
+    )
+
+
+@app.post("/download-pngs", tags=["dev"])
+async def download_pngs(
+    emp_no: str = Form(...),
+    artifact_id: str = Form(..., description="MinIO에 저장된 산출물 식별자 (생성 시 넘긴 artifact_id)"),
+):
+    """MinIO의 '{emp_no}/slide/{artifact_id}/pngs/' 아래 슬라이드별 렌더링 PNG 스크린샷을
+    모두 모아 zip으로 묶어 다운로드."""
+    from starlette.background import BackgroundTask
+
+    from deeppresenter.tools.storage import download_pngs_by_artifact
+
+    try:
+        local_path, prefix = download_pngs_by_artifact(emp_no, artifact_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("[DownloadPngs] MinIO download failed: %s", e)
         raise HTTPException(status_code=500, detail=f"MinIO download failed: {e}")
 
     zip_filename = f"{artifact_id}.zip"
