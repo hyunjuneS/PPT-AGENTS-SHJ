@@ -72,6 +72,18 @@ def _prepend_notice(message: BaseMessage, notice_block: dict) -> BaseMessage:
     return message.model_copy(update={"content": new_content})
 
 
+def _dump_message(m: BaseMessage) -> dict:
+    """Same shape as design_graph.py/research_graph.py's _save_history dump — full, untruncated
+    content (not the redacted/truncated debug-log preview) so llm_call_log's input/output are a
+    faithful record of exactly what was sent to and received from the model."""
+    return {
+        "type": m.__class__.__name__,
+        "content": m.content,
+        "tool_calls": getattr(m, "tool_calls", None),
+        "tool_call_id": getattr(m, "tool_call_id", None),
+    }
+
+
 async def _invoke_with_retry(model_with_tools, messages, model_name: str, retry_times: int = RETRY_TIMES):
     """Port of the old engine's LLM.run() retry loop
     (deeppresenter/utils/config.py:85-113): retry on any exception, AND on a
@@ -150,7 +162,9 @@ def build_graph(
             updates.append(warned_last)
 
         show_agent_turn(agent_name, turn_count, max_turns)
+        call_start = time.time()
         response = await _invoke_with_retry(model_with_tools, messages, model_name)
+        elapsed = time.time() - call_start
 
         for tc in response.tool_calls or []:
             show_tool_call(tc["name"], tc["args"])
@@ -160,10 +174,18 @@ def build_graph(
         if usage:
             context_length = usage.get("total_tokens", context_length)
 
+        call_record = {
+            "turn": turn_count,
+            "elapsed_seconds": round(elapsed, 3),
+            "input": [_dump_message(m) for m in messages],
+            "output": _dump_message(response),
+        }
+
         return {
             "messages": [*updates, response],
             "turn_count": turn_count,
             "context_length": context_length,
+            "llm_call_log": [call_record],
         }
 
     def route_after_agent(state: GraphState) -> str:

@@ -116,6 +116,29 @@ def _save_history(
         )
 
 
+def _save_llm_call_log(workspace: Path, agent_name: str, calls: list[dict]) -> None:
+    """Writes .history/{agent}-llm-calls.json: one entry per LLM call this run made
+    (engine.py's agent_node), each with its turn number, exact input messages, output
+    message, and how long that single request took — plus the summed total across every
+    call, so total LLM wall-clock time for the run is visible without adding it up by hand."""
+    hist_dir = workspace / ".history"
+    hist_dir.mkdir(parents=True, exist_ok=True)
+
+    total_elapsed = sum(c["elapsed_seconds"] for c in calls)
+    with open(hist_dir / f"{agent_name}-llm-calls.json", "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "agent": agent_name,
+                "call_count": len(calls),
+                "total_elapsed_seconds": round(total_elapsed, 3),
+                "calls": calls,
+            },
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
+
+
 async def run_design_graph(
     config: DeepPresenterConfig,
     workspace: Path,
@@ -185,6 +208,7 @@ async def run_design_graph(
             "context_warning": -1 if config.context_folding else 0,
             "agent_name": "Design",
             "final_outcome": None,
+            "llm_call_log": [],
         }
 
         run_config: dict = {"recursion_limit": _RECURSION_LIMIT}
@@ -217,6 +241,7 @@ async def run_design_graph(
     _save_history(
         workspace, "Design", final_state["messages"], llm.model_name, total_tokens, cost, tool_names
     )
+    _save_llm_call_log(workspace, "Design", final_state.get("llm_call_log", []))
 
     return DesignGraphResult(
         slides_dir=slides_dir,
