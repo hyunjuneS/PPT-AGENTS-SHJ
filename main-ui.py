@@ -329,9 +329,6 @@ async def _design_response(result, session_id: str, artifact_id: str, emp_no: st
     html directly in a browser (html2pptx.js only ever turned it into a native PPTX chart — the
     div itself was otherwise empty in plain HTML).
     """
-    import shutil
-    import tempfile
-
     from deeppresenter.tools.export import combine_html_slides, html_slides_to_pptx, inject_chart_rendering
     from deeppresenter.tools.storage import (
         resolve_unique_artifact_id,
@@ -367,25 +364,23 @@ async def _design_response(result, session_id: str, artifact_id: str, emp_no: st
         logger.error("[Design] MinIO upload failed: %s", e)
         raise HTTPException(status_code=500, detail=f"MinIO upload failed: {e}")
 
-    png_dir = Path(tempfile.mkdtemp(prefix="pptagent_pngs_"))
-    try:
-        png_files = []
-        for html_file in html_files:
-            img_bytes, _ = await screenshot_slide(str(html_file), aspect_ratio="16:9", image_format="png")
-            if img_bytes is None:
-                logger.warning("[Design] screenshot failed for %s, skipping its PNG", html_file)
-                continue
-            png_path = png_dir / f"{html_file.stem}.png"
-            png_path.write_bytes(img_bytes)
-            png_files.append(str(png_path))
+    png_dir = Path(slides_dir) / "pngs"
+    png_dir.mkdir(exist_ok=True)
+    png_files = []
+    for html_file in html_files:
+        img_bytes, _ = await screenshot_slide(str(html_file), aspect_ratio="16:9", image_format="png")
+        if img_bytes is None:
+            logger.warning("[Design] screenshot failed for %s, skipping its PNG", html_file)
+            continue
+        png_path = png_dir / f"{html_file.stem}.png"
+        png_path.write_bytes(img_bytes)
+        png_files.append(str(png_path))
 
-        try:
-            png_object_names = upload_pngs_by_artifact(png_files, emp_no, artifact_id)
-        except Exception as e:
-            logger.error("[Design] MinIO pngs upload failed: %s", e)
-            raise HTTPException(status_code=500, detail=f"MinIO pngs upload failed: {e}")
-    finally:
-        shutil.rmtree(png_dir, ignore_errors=True)
+    try:
+        png_object_names = upload_pngs_by_artifact(png_files, emp_no, artifact_id)
+    except Exception as e:
+        logger.error("[Design] MinIO pngs upload failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"MinIO pngs upload failed: {e}")
 
     css_path = Path(slides_dir) / "global.css"
     image_extensions = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")
