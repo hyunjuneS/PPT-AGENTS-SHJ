@@ -40,10 +40,21 @@ logging.basicConfig(
 # 콘솔(stdout)에 찍히는 것과 같은 내용을 그대로 파일에도 남긴다 — turn/tool_call/tool_result 등
 # deeppresenter.utils.log를 거치는 모든 진행 로그가 여기 포함된다(재시작해도 이어쓰기).
 # WORKSPACE_BASE(기본: deeppresenter/output/YYYYMMDD)에 날짜별로 쌓인다.
-WORKSPACE_BASE.mkdir(parents=True, exist_ok=True)
-_log_file_handler = logging.FileHandler(WORKSPACE_BASE / "server.log", encoding="utf-8")
-_log_file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
-logging.root.addHandler(_log_file_handler)
+#
+# 중복 부착 방지: __main__ 실행 시 아래 uvicorn.run("main-ui:app", ...)이 문자열 앱 경로를
+# 쓰는데(reload=True에 필수), 이 때문에 uvicorn이 "main-ui"를 __main__과는 별개의 모듈로
+# 다시 import해서 이 파일의 top-level 코드(바로 이 블록 포함)가 같은 프로세스 안에서 두 번
+# 실행된다. logging.basicConfig()는 자체적으로 중복 방지가 되지만 addHandler는 그렇지 않아서,
+# 가드 없이는 같은 파일을 가리키는 FileHandler가 두 번 붙어 모든 로그 줄이 두 번씩 찍힌다.
+_log_file_path = str((WORKSPACE_BASE / "server.log").resolve())
+if not any(
+    isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == _log_file_path
+    for h in logging.root.handlers
+):
+    WORKSPACE_BASE.mkdir(parents=True, exist_ok=True)
+    _log_file_handler = logging.FileHandler(_log_file_path, encoding="utf-8")
+    _log_file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    logging.root.addHandler(_log_file_handler)
 
 for _handler in logging.root.handlers:
     _handler.addFilter(SessionIdFilter())
