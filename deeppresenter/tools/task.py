@@ -11,12 +11,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from deeppresenter.utils.constants import (
-    HEAVY_REFLECT,
-    INSPECT_CONTENT_MAX_CALLS,
-    READ_FILE_CUTOFF_LEN,
-    TOOL_CUTOFF_LEN,
-)
+from deeppresenter.utils.constants import HEAVY_REFLECT, INSPECT_CONTENT_MAX_CALLS, TOOL_CUTOFF_LEN
 from deeppresenter.utils.log import debug, warning
 
 _SCREENSHOT_JS = Path(__file__).resolve().parents[1] / "html2pptx" / "screenshot.js"
@@ -211,61 +206,25 @@ FINALIZE_SPEC = {
 
 # ── read_file ─────────────────────────────────────────────────────────────────
 
-def read_file(path: str, offset: int = 0, length: int = 500) -> str:
-    """
-    Read a text file. Use offset/length for large files.
-    offset: starting line number (0-based).
-    length: max lines to return.
-
-    Truncation never skips content: if the requested window exceeds
-    READ_FILE_CUTOFF_LEN characters, the response is cut back to the last full
-    line that still fits, and the "continue" hint advances offset by exactly
-    that many lines actually returned — not by the full requested `length` —
-    so following the hint literally can never jump over unread content.
-    """
+def read_file(path: str) -> str:
+    """Read and return the full contents of a text file — no offset/length,
+    no truncation. Source manuscripts and templates here are plain text files
+    at most a few hundred KB, trivial next to the model's context window, so
+    there is nothing to chunk: one call always returns everything."""
     p = Path(path)
     assert p.exists(), f"File not found: {path}"
-    lines = p.read_text(encoding="utf-8").splitlines()
-    total = len(lines)
-    if offset >= total:
-        return f"(EOF — file has {total} lines total, offset {offset} is past the end)"
-    chunk = lines[offset: offset + length]
-
-    result = "\n".join(chunk)
-    if len(result) > READ_FILE_CUTOFF_LEN:
-        kept_lines: list[str] = []
-        kept_len = 0
-        for line in chunk:
-            added = len(line) + (1 if kept_lines else 0)  # +1 for the joining "\n"
-            if kept_len + added > READ_FILE_CUTOFF_LEN:
-                break
-            kept_lines.append(line)
-            kept_len += added
-        lines_returned = max(len(kept_lines), 1)  # always advance by at least one line
-        next_offset = offset + lines_returned
-        result = (
-            "\n".join(chunk[:lines_returned])
-            + f"\n... (truncated, {lines_returned}/{len(chunk)} lines shown — "
-            f"use offset={next_offset} to continue, do not compute offset+length yourself)"
-        )
-    return result
+    return p.read_text(encoding="utf-8")
 
 
 READ_FILE_SPEC = {
     "type": "function",
     "function": {
         "name": "read_file",
-        "description": (
-            "Read contents of a local text file. Use offset and length for large files. "
-            f"Responses are capped at {READ_FILE_CUTOFF_LEN} characters — if the result says "
-            "'truncated', always continue from the exact offset it gives you, never offset+length."
-        ),
+        "description": "Read and return the full contents of a local text file.",
         "parameters": {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Absolute path to the file."},
-                "offset": {"type": "integer", "description": "Starting line number (0-based). Default 0."},
-                "length": {"type": "integer", "description": "Max lines to return. Default 500."},
             },
             "required": ["path"],
         },

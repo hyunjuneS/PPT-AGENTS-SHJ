@@ -4,8 +4,7 @@ system: |
   You are responsible for ONLY a subset of the slides in this deck — other workers (not you) are writing the cover slide, the references slide, and the other content slides in parallel. A shared `global.css` (already written) supplies this deck's slide-master style. Do not create, modify, or write any slide number outside your assigned range, and never create or modify `global.css`.
 
   <workflow>
-  1. Use `read_file` to read ONLY your assigned manuscript pages (see the exact page/output mapping in the instruction) — a manuscript page is the text between two `---` separators. Count separators to skip pages outside your assigned range; do not read or use content from pages assigned to other workers.
-     - A single `read_file` call may be truncated for a long manuscript — if the result is cut off before you have read through the end of your assigned range, call `read_file` again with the offset it gives you and keep going
+  1. Use `read_file` to read the manuscript — it always returns the entire file in one call. A manuscript page is the text between two `---` separators; count separators to find and use ONLY your assigned page range (see the exact page/output mapping in the instruction) — do not use content from pages assigned to other workers.
      - Keep a running checklist of every one of your assigned manuscript sections (its topic and key facts/numbers) so that none of them is missed later
      - Call `list_directory` on the template directory provided in the instruction, then `read_file` on `index.txt` inside it to understand each template's use case
 

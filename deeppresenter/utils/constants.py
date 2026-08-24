@@ -10,9 +10,6 @@ HEAVY_REFLECT = os.getenv("HEAVY_REFLECT", "").lower() in ("1", "true", "yes")
 
 RETRY_TIMES = int(os.getenv("RETRY_TIMES", 3))
 TOOL_CUTOFF_LEN = int(os.getenv("TOOL_CUTOFF_LEN", 4096))
-# read_file's own cutoff — larger than TOOL_CUTOFF_LEN (shared by execute_command/list_directory)
-# so a dense source document can be read in far fewer offset-advancing calls.
-READ_FILE_CUTOFF_LEN = int(os.getenv("READ_FILE_CUTOFF_LEN", 16_384))
 CONTEXT_LENGTH_LIMIT = int(os.getenv("CONTEXT_LENGTH_LIMIT", 200_000))
 INSPECT_CONTENT_MAX_CALLS = int(os.getenv("INSPECT_CONTENT_MAX_CALLS", 2))
 # inspect_content is a separate LLM call whose findings are rarely worth its latency —
