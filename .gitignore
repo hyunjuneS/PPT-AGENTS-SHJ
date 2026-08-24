@@ -4,6 +4,9 @@ __pycache__/
 .venv/
 node_modules/
 
+# 런타임 워크스페이스 출력 (DEEPPRESENTER_WORKSPACE_BASE 기본값) — 세션별 생성물, 미추적
+deeppresenter/output/
+
 # 로컬 전용 폰트 파일 (TTF/OTF) — git 미추적, 직접 배치
 fonts/
 
