@@ -522,13 +522,15 @@ async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_f
     """원고(.md) → Design 에이전트(Hynix 템플릿)로 HTML 슬라이드 생성.
 
     DESIGN_PARALLEL_MODE가 켜져 있으면 run_design_graph_parallel(슬라이드를 워커별로 나눠
-    asyncio.Semaphore로 동시 실행)을 대신 쓴다 — 단, 커스텀 DESIGN_CONFIG_FILE/DESIGN_TEMPLATE_FILE이
-    설정된 경우는 병렬 매니페스트가 전제하는 기본 design-hynix.yaml 워크플로우 구조와 다를 수 있어
-    항상 기존 직렬 경로(run_design_graph)로 폴백한다. template-free 경로(_run_design_free_stage)는
-    이 분기와 무관하게 항상 직렬로만 동작한다."""
+    asyncio.Semaphore로 동시 실행)을 대신 쓴다 — 단, DESIGN_CONFIG_FILE이 기본 design-hynix.yaml이
+    아닌 다른(커스텀) yaml을 가리킬 때나 DESIGN_TEMPLATE_FILE이 설정된 경우는, 병렬 워커 4개 yaml이
+    design-hynix.yaml 구조를 그대로 손으로 옮겨 만든 것이라 그 가정이 안 맞을 수 있어 항상 기존
+    직렬 경로(run_design_graph)로 폴백한다. DESIGN_CONFIG_FILE이 design-hynix.yaml 자체를 가리키는
+    (일반적인) 경우는 병렬 모드 대상이다. template-free 경로(_run_design_free_stage)는 이 분기와
+    무관하게 항상 직렬로만 동작한다."""
     from deeppresenter.graph.callbacks import get_langfuse_handler
     from deeppresenter.graph.design_graph import run_design_graph, run_design_graph_parallel
-    from deeppresenter.utils.constants import DESIGN_PARALLEL_MODE
+    from deeppresenter.utils.constants import DESIGN_PARALLEL_MODE, PACKAGE_DIR
     from deeppresenter.utils.typings import InputRequest
 
     req = InputRequest(instruction=instruction, language=_LANGUAGE)
@@ -539,11 +541,13 @@ async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_f
         template_content = Path(tmpl_path).read_text(encoding="utf-8")
 
     config_file = os.environ.get("DESIGN_CONFIG_FILE") or None
-    use_parallel = DESIGN_PARALLEL_MODE and not config_file and not template_content
+    default_hynix_config_file = PACKAGE_DIR / "roles" / "design-hynix.yaml"
+    is_default_hynix_config = bool(config_file) and Path(config_file).resolve() == default_hynix_config_file.resolve()
+    use_parallel = DESIGN_PARALLEL_MODE and is_default_hynix_config and not template_content
 
     logger.info("[DesignHynixTemplate] session=%s lang=%s file=%s config=%s template=%s parallel=%s",
                 session_id, _LANGUAGE, Path(markdown_file).name,
-                Path(config_file).name if config_file else "Design.yaml",
+                Path(config_file).name if config_file else "(unset)",
                 bool(template_content), use_parallel)
 
     try:
