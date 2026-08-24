@@ -16,23 +16,35 @@ from fastapi.responses import FileResponse
 
 from agents.llms import AsyncLLM
 from deeppresenter.utils.config import LLM
+from deeppresenter.utils.constants import WORKSPACE_BASE
 from deeppresenter.utils.log import SessionIdFilter, set_session_id
 
 # .env 파일을 os.environ 에 주입. reload worker 재import 시에도 동일하게 적용된다.
 load_dotenv()
+
+_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s session_id=%(session_id)s: %(message)s"
 
 logging.basicConfig(
     level=logging.INFO,
     # session_id — 동시에 여러 요청이 들어와도 로그 한 줄 한 줄이 어느 요청 것인지 구분할 수
     # 있도록 모든 로그 라인에 붙인다 (SessionIdFilter가 채움). Loki에서
     # `|= "session_id=abc12345"`로 필터링하면 그 요청의 로그만 시간순으로 모아 볼 수 있다.
-    format="%(asctime)s [%(levelname)s] %(name)s session_id=%(session_id)s: %(message)s",
+    format=_LOG_FORMAT,
     # logging.StreamHandler()의 기본 스트림은 stdout이 아니라 stderr — 명시하지 않으면
     # 정상 운영 로그(logger.info)가 컨테이너의 STDERR로 나가서, 같은 stdout으로 나가는
     # deeppresenter/utils/log.py의 print() 기반 에이전트 진행 로그와 스트림이 갈라진다
     # (Loki 같은 로그 수집기에서 STDOUT/STDERR가 다른 스트림으로 분리돼 보이는 원인).
     stream=sys.stdout,
 )
+
+# 콘솔(stdout)에 찍히는 것과 같은 내용을 그대로 파일에도 남긴다 — turn/tool_call/tool_result 등
+# deeppresenter.utils.log를 거치는 모든 진행 로그가 여기 포함된다(재시작해도 이어쓰기).
+# WORKSPACE_BASE(기본: deeppresenter/output/YYYYMMDD)에 날짜별로 쌓인다.
+WORKSPACE_BASE.mkdir(parents=True, exist_ok=True)
+_log_file_handler = logging.FileHandler(WORKSPACE_BASE / "server.log", encoding="utf-8")
+_log_file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+logging.root.addHandler(_log_file_handler)
+
 for _handler in logging.root.handlers:
     _handler.addFilter(SessionIdFilter())
 logger = logging.getLogger(__name__)
