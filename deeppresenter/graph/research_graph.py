@@ -153,6 +153,13 @@ async def run_research_graph(
     llm = config[role_config.use_model]
     chat_model = to_chat_openai(llm)
 
+    expected_pages: int | None = None
+    if req.num_pages:
+        try:
+            expected_pages = int(req.num_pages)
+        except ValueError:
+            pass
+
     async with AgentEnv(workspace) as env:
         tools = build_tools_for_role(
             role_config,
@@ -160,6 +167,7 @@ async def run_research_graph(
             env._server_tools,
             finalize_overrides={"agent_name": "Research"},
             llm=llm,
+            expected_pages=expected_pages,
         )
         tool_names = [t.name for t in tools]
 

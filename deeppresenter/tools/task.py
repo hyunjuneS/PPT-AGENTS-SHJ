@@ -11,7 +11,12 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from deeppresenter.utils.constants import HEAVY_REFLECT, INSPECT_CONTENT_MAX_CALLS, TOOL_CUTOFF_LEN
+from deeppresenter.utils.constants import (
+    HEAVY_REFLECT,
+    INSPECT_CONTENT_MAX_CALLS,
+    READ_FILE_CUTOFF_LEN,
+    TOOL_CUTOFF_LEN,
+)
 from deeppresenter.utils.log import debug, warning
 
 _SCREENSHOT_JS = Path(__file__).resolve().parents[1] / "html2pptx" / "screenshot.js"
@@ -174,6 +179,13 @@ def finalize(outcome: str, agent_name: str = "") -> str:
         if not all(f.stem.startswith("slide_") for f in html_files):
             return "All HTML files should be named slide_NN.html"
 
+    elif agent_name == "DesignPlan":
+        # Phase A of parallel Design (design_graph.py's run_design_plan_phase) only
+        # produces the shared global.css slide-master style — no slide_*.html yet,
+        # so it can't use the "Design" branch's html-file check above.
+        if not (path / "global.css").exists():
+            return "Outcome path should be the slides/ directory containing global.css"
+
     debug(f"Agent {agent_name} finalized outcome: {outcome}")
     return outcome
 
@@ -199,11 +211,17 @@ FINALIZE_SPEC = {
 
 # ── read_file ─────────────────────────────────────────────────────────────────
 
-def read_file(path: str, offset: int = 0, length: int = 200) -> str:
+def read_file(path: str, offset: int = 0, length: int = 500) -> str:
     """
     Read a text file. Use offset/length for large files.
     offset: starting line number (0-based).
     length: max lines to return.
+
+    Truncation never skips content: if the requested window exceeds
+    READ_FILE_CUTOFF_LEN characters, the response is cut back to the last full
+    line that still fits, and the "continue" hint advances offset by exactly
+    that many lines actually returned — not by the full requested `length` —
+    so following the hint literally can never jump over unread content.
     """
     p = Path(path)
     assert p.exists(), f"File not found: {path}"
@@ -212,9 +230,24 @@ def read_file(path: str, offset: int = 0, length: int = 200) -> str:
     if offset >= total:
         return f"(EOF — file has {total} lines total, offset {offset} is past the end)"
     chunk = lines[offset: offset + length]
+
     result = "\n".join(chunk)
-    if len(result) > TOOL_CUTOFF_LEN:
-        result = result[:TOOL_CUTOFF_LEN] + f"\n... (truncated, use offset={offset+length} to continue)"
+    if len(result) > READ_FILE_CUTOFF_LEN:
+        kept_lines: list[str] = []
+        kept_len = 0
+        for line in chunk:
+            added = len(line) + (1 if kept_lines else 0)  # +1 for the joining "\n"
+            if kept_len + added > READ_FILE_CUTOFF_LEN:
+                break
+            kept_lines.append(line)
+            kept_len += added
+        lines_returned = max(len(kept_lines), 1)  # always advance by at least one line
+        next_offset = offset + lines_returned
+        result = (
+            "\n".join(chunk[:lines_returned])
+            + f"\n... (truncated, {lines_returned}/{len(chunk)} lines shown — "
+            f"use offset={next_offset} to continue, do not compute offset+length yourself)"
+        )
     return result
 
 
@@ -222,13 +255,17 @@ READ_FILE_SPEC = {
     "type": "function",
     "function": {
         "name": "read_file",
-        "description": "Read contents of a local text file. Use offset and length for large files.",
+        "description": (
+            "Read contents of a local text file. Use offset and length for large files. "
+            f"Responses are capped at {READ_FILE_CUTOFF_LEN} characters — if the result says "
+            "'truncated', always continue from the exact offset it gives you, never offset+length."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Absolute path to the file."},
                 "offset": {"type": "integer", "description": "Starting line number (0-based). Default 0."},
-                "length": {"type": "integer", "description": "Max lines to return. Default 200."},
+                "length": {"type": "integer", "description": "Max lines to return. Default 500."},
             },
             "required": ["path"],
         },
@@ -369,16 +406,38 @@ EXECUTE_COMMAND_SPEC = {
 
 # ── inspect_manuscript ────────────────────────────────────────────────────────
 
-def inspect_manuscript(path: str) -> str:
+_PAGE_SEPARATOR_RE = re.compile(r"^[ \t]*-{3,}[ \t]*$", re.MULTILINE)
+
+
+def split_pages(content: str) -> list[str]:
+    """Splits a manuscript into pages on lines that are a standalone `---` (or
+    longer-dash) separator. Unlike a plain `content.split("---")`, this does not
+    miscount a markdown table separator row (`|---|---|`) or any other inline use
+    of the substring, since those never occupy an entire line by themselves.
+    Shared with design_graph.py's parallel-mode slide manifest calculation, so
+    both always agree on how many pages a manuscript has."""
+    pages = [s.strip() for s in _PAGE_SEPARATOR_RE.split(content)]
+    return [pg for pg in pages if pg]
+
+
+def inspect_manuscript(path: str, expected_pages: int | None = None) -> str:
     """
     Basic validation of a markdown manuscript.
     Checks that it has at least one --- separator and is non-empty.
+    expected_pages, if bound (see build_tools_for_role), reports an explicit
+    mismatch instead of leaving the LLM to judge the page count itself.
     """
     p = Path(path)
     assert p.exists() and p.suffix == ".md", f"Not a valid .md file: {path}"
     content = p.read_text(encoding="utf-8")
     assert content.strip(), "Manuscript is empty"
-    pages = [s.strip() for s in content.split("---") if s.strip()]
+    pages = split_pages(content)
+
+    if expected_pages is not None and len(pages) != expected_pages:
+        delta = expected_pages - len(pages)
+        action = f"add {delta} page(s)" if delta > 0 else f"remove {-delta} page(s)"
+        return f"Page count MISMATCH: expected {expected_pages}, found {len(pages)} — {action}."
+
     return f"Manuscript looks good: {len(pages)} page(s), {len(content)} chars."
 
 

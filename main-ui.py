@@ -519,9 +519,16 @@ async def _run_research_stage(config, workspace, session_id: str, file: UploadFi
 
 
 async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_file: str, instruction: str):
-    """원고(.md) → Design 에이전트(Hynix 템플릿)로 HTML 슬라이드 생성."""
+    """원고(.md) → Design 에이전트(Hynix 템플릿)로 HTML 슬라이드 생성.
+
+    DESIGN_PARALLEL_MODE가 켜져 있으면 run_design_graph_parallel(슬라이드를 워커별로 나눠
+    asyncio.Semaphore로 동시 실행)을 대신 쓴다 — 단, 커스텀 DESIGN_CONFIG_FILE/DESIGN_TEMPLATE_FILE이
+    설정된 경우는 병렬 매니페스트가 전제하는 기본 design-hynix.yaml 워크플로우 구조와 다를 수 있어
+    항상 기존 직렬 경로(run_design_graph)로 폴백한다. template-free 경로(_run_design_free_stage)는
+    이 분기와 무관하게 항상 직렬로만 동작한다."""
     from deeppresenter.graph.callbacks import get_langfuse_handler
-    from deeppresenter.graph.design_graph import run_design_graph
+    from deeppresenter.graph.design_graph import run_design_graph, run_design_graph_parallel
+    from deeppresenter.utils.constants import DESIGN_PARALLEL_MODE
     from deeppresenter.utils.typings import InputRequest
 
     req = InputRequest(instruction=instruction, language=_LANGUAGE)
@@ -532,13 +539,24 @@ async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_f
         template_content = Path(tmpl_path).read_text(encoding="utf-8")
 
     config_file = os.environ.get("DESIGN_CONFIG_FILE") or None
+    use_parallel = DESIGN_PARALLEL_MODE and not config_file and not template_content
 
-    logger.info("[DesignHynixTemplate] session=%s lang=%s file=%s config=%s template=%s",
+    logger.info("[DesignHynixTemplate] session=%s lang=%s file=%s config=%s template=%s parallel=%s",
                 session_id, _LANGUAGE, Path(markdown_file).name,
                 Path(config_file).name if config_file else "Design.yaml",
-                bool(template_content))
+                bool(template_content), use_parallel)
 
     try:
+        if use_parallel:
+            return await run_design_graph_parallel(
+                config=config,
+                workspace=workspace,
+                req=req,
+                markdown_file=markdown_file,
+                language=_LANGUAGE,
+                langfuse_handler=get_langfuse_handler(session_id),
+                session_id=session_id,
+            )
         return await run_design_graph(
             config=config,
             workspace=workspace,

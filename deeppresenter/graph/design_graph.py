@@ -7,9 +7,10 @@ intermediate items to the HTTP client anyway (see main-ui.py's design
 endpoints: it only accumulates a `turns` count and truncated previews).
 """
 
+import asyncio
 import json
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -20,9 +21,17 @@ from deeppresenter.agents.env import AgentEnv
 from deeppresenter.graph.engine import build_graph
 from deeppresenter.graph.llm_adapter import to_chat_openai
 from deeppresenter.graph.tools import build_tools_for_role
+from deeppresenter.tools.task import split_pages
 from deeppresenter.utils.config import DeepPresenterConfig
-from deeppresenter.utils.constants import CONTEXT_MODE_PROMPT, HEAVY_REFLECT, OFFLINE_PROMPT, PACKAGE_DIR
-from deeppresenter.utils.log import show_agent_start
+from deeppresenter.utils.constants import (
+    CONTEXT_MODE_PROMPT,
+    DESIGN_PARALLEL_CHUNK_SIZE,
+    DESIGN_PARALLEL_CONCURRENCY,
+    HEAVY_REFLECT,
+    OFFLINE_PROMPT,
+    PACKAGE_DIR,
+)
+from deeppresenter.utils.log import show_agent_start, warning
 from deeppresenter.utils.typings import InputRequest, RoleConfig
 
 _HYNIX_TEMPLATE_DIR = str(PACKAGE_DIR / "roles" / "templates" / "hynix")
@@ -247,5 +256,308 @@ async def run_design_graph(
         slides_dir=slides_dir,
         messages_log=messages_log,
         turn_count=final_state["turn_count"],
+        cost=cost,
+    )
+
+
+# ── Parallel Design (template-based/hynix path only, see plan doc Area 2) ──────
+#
+# run_design_graph (above) stays untouched as the serial default/fallback. The
+# functions below implement an alternative orchestration: instead of one
+# build_graph().ainvoke() writing the whole deck slide-by-slide, a fixed slide
+# manifest is computed here in plain Python (never left to the LLM to decide),
+# and one independent build_graph().ainvoke() per slide-owning worker runs
+# concurrently (asyncio.Semaphore-limited), all sharing the same
+# workspace/slides directory and a global.css that a dedicated "Phase A" run
+# writes before any worker starts (see DesignPlanPhase-hynix.yaml).
+#
+# Wired in only for main-ui.py's _run_design_hynix_stage (DESIGN_PARALLEL_MODE
+# env flag) — the template-free path is untouched and always uses the serial
+# run_design_graph above.
+
+@dataclass
+class _WorkerResult:
+    tag: str
+    slides_dir: str
+    messages_log: list[dict] = field(default_factory=list)
+    turn_count: int = 0
+    cost: dict = field(default_factory=lambda: {"prompt": 0, "completion": 0, "total": 0})
+    llm_call_log: list[dict] = field(default_factory=list)
+
+
+async def _run_design_worker(
+    config: DeepPresenterConfig,
+    workspace: Path,
+    req: InputRequest,
+    role_config_file: str | Path,
+    render_vars: dict,
+    finalize_agent_name: str,
+    worker_tag: str,
+    language: str = "en",
+    langfuse_handler=None,
+    session_id: str | None = None,
+) -> _WorkerResult:
+    """Runs one independent build_graph().ainvoke() for a single Design worker
+    role (Phase A, cover, a content chunk, or references) — the same
+    AgentEnv/build_graph/graph.ainvoke() pattern run_design_graph uses for the
+    whole deck, just scoped to this worker's own role YAML and render_vars.
+    Every worker's tools operate on the shared workspace/slides directory, but
+    each worker instance (chat_model, tools, graph, AgentEnv) is independent, so
+    running several of these concurrently is safe — nothing here holds shared
+    mutable state across workers."""
+    role_config = _load_role_config(role_config_file)
+    llm = config[role_config.use_model]
+    chat_model = to_chat_openai(llm)
+    vlm_llm = config.vlm_agent if HEAVY_REFLECT else None
+
+    async with AgentEnv(workspace) as env:
+        tools = build_tools_for_role(
+            role_config,
+            env._tools_dict,
+            env._server_tools,
+            finalize_overrides={"agent_name": finalize_agent_name},
+            vlm_llm=vlm_llm,
+        )
+        tool_names = [t.name for t in tools]
+
+        system_text = _build_system_prompt(role_config, language, config)
+        prompt_template = Template(role_config.instruction, undefined=StrictUndefined)
+        instruction_text = prompt_template.render(**render_vars)
+
+        agent_label = f"Design-{worker_tag}"
+        show_agent_start(agent_label, None)
+        graph = build_graph(chat_model, tools, context_window=config.context_window)
+
+        initial_state = {
+            "messages": [
+                SystemMessage(content=system_text),
+                HumanMessage(content=instruction_text),
+            ],
+            "turn_count": 0,
+            "max_turns": None,
+            "context_length": 0,
+            "context_window": config.context_window,
+            "context_warning": -1 if config.context_folding else 0,
+            "agent_name": agent_label,
+            "final_outcome": None,
+            "llm_call_log": [],
+        }
+
+        run_config: dict = {"recursion_limit": _RECURSION_LIMIT}
+        if langfuse_handler is not None:
+            run_config["callbacks"] = [langfuse_handler]
+            if session_id:
+                run_config["metadata"] = {"langfuse_session_id": session_id}
+
+        final_state = await graph.ainvoke(initial_state, config=run_config)
+
+    slides_dir = final_state.get("final_outcome")
+    if not slides_dir:
+        raise RuntimeError(f"Design worker '{worker_tag}' did not call finalize with a confirmed outcome.")
+
+    messages_log: list[dict] = []
+    prompt_tokens = completion_tokens = total_tokens = 0
+    for m in final_state["messages"]:
+        if isinstance(m, AIMessage):
+            messages_log.append({"role": "assistant", "text": _message_preview(m.content), "worker": worker_tag})
+            usage = getattr(m, "usage_metadata", None)
+            if usage:
+                prompt_tokens += usage.get("input_tokens", 0) or 0
+                completion_tokens += usage.get("output_tokens", 0) or 0
+                total_tokens += usage.get("total_tokens", 0) or 0
+        elif isinstance(m, ToolMessage):
+            messages_log.append({"role": "tool", "text": _message_preview(m.content), "worker": worker_tag})
+
+    cost = {"prompt": prompt_tokens, "completion": completion_tokens, "total": total_tokens}
+
+    _save_history(
+        workspace, agent_label, final_state["messages"], llm.model_name, total_tokens, cost, tool_names
+    )
+    _save_llm_call_log(workspace, agent_label, final_state.get("llm_call_log", []))
+
+    return _WorkerResult(
+        tag=worker_tag,
+        slides_dir=slides_dir,
+        messages_log=messages_log,
+        turn_count=final_state["turn_count"],
+        cost=cost,
+        llm_call_log=final_state.get("llm_call_log", []),
+    )
+
+
+async def run_design_plan_phase(
+    config: DeepPresenterConfig,
+    workspace: Path,
+    req: InputRequest,
+    markdown_file: str,
+    language: str = "en",
+    langfuse_handler=None,
+    session_id: str | None = None,
+) -> _WorkerResult:
+    """Phase A of parallel Design: decides the deck's shared slide-master style
+    and saves slides/global.css. Run alone (awaited before any other worker
+    starts) since every other worker's slides link to this file."""
+    workspace = Path(workspace)
+    slides_dir = workspace / "slides"
+    slides_dir.mkdir(parents=True, exist_ok=True)
+
+    render_vars = {
+        "markdown_file": markdown_file,
+        "prompt": req.designagent_prompt,
+        "template_dir": _HYNIX_TEMPLATE_DIR,
+        "slides_dir": str(slides_dir),
+    }
+    return await _run_design_worker(
+        config, workspace, req,
+        role_config_file=PACKAGE_DIR / "roles" / "DesignPlanPhase-hynix.yaml",
+        render_vars=render_vars,
+        finalize_agent_name="DesignPlan",
+        worker_tag="plan",
+        language=language,
+        langfuse_handler=langfuse_handler,
+        session_id=session_id,
+    )
+
+
+async def run_design_graph_parallel(
+    config: DeepPresenterConfig,
+    workspace: Path,
+    req: InputRequest,
+    markdown_file: str,
+    language: str = "en",
+    langfuse_handler=None,
+    session_id: str | None = None,
+) -> DesignGraphResult:
+    """Parallel Design-agent orchestration for the template-based/hynix path
+    only. Splits the manuscript into a fixed slide manifest — cover, N content
+    chunks, references, end-page — computed here in plain Python, then runs one
+    independent worker per manifest entry, concurrency-limited by
+    asyncio.Semaphore(DESIGN_PARALLEL_CONCURRENCY). Any worker failure
+    (exception, or a missing expected slide_NN.html once all workers finish)
+    fails the whole request — no partial deck is ever returned, since
+    _design_response (main-ui.py) assumes a complete slides directory."""
+    workspace = Path(workspace)
+    slides_dir = workspace / "slides"
+    slides_dir.mkdir(parents=True, exist_ok=True)
+
+    for asset_name in _HYNIX_TEMPLATE_ASSETS:
+        asset_src = Path(_HYNIX_TEMPLATE_DIR) / asset_name
+        if asset_src.exists():
+            shutil.copy(asset_src, slides_dir / asset_name)
+
+    manuscript_content = Path(markdown_file).read_text(encoding="utf-8")
+    page_count = len(split_pages(manuscript_content))
+    if page_count < 2:
+        raise RuntimeError(
+            "Design parallel mode needs at least 2 manuscript pages (cover + closing), "
+            f"got {page_count}."
+        )
+
+    references_slide_no = page_count + 1
+    end_slide_no = page_count + 2
+    total_slides = end_slide_no
+
+    show_agent_start("Design-parallel", None)
+
+    plan_result = await run_design_plan_phase(
+        config, workspace, req, markdown_file,
+        language=language, langfuse_handler=langfuse_handler, session_id=session_id,
+    )
+
+    worker_specs: list[dict] = [
+        {
+            "role_config_file": PACKAGE_DIR / "roles" / "DesignCoverWorker-hynix.yaml",
+            "render_vars": {
+                "markdown_file": markdown_file,
+                "prompt": req.designagent_prompt,
+                "template_dir": _HYNIX_TEMPLATE_DIR,
+                "slides_dir": str(slides_dir),
+            },
+            "worker_tag": "cover",
+        },
+    ]
+
+    content_start, content_end = 2, page_count  # closing page folds into the last chunk
+    page = content_start
+    while page <= content_end:
+        chunk_end = min(page + DESIGN_PARALLEL_CHUNK_SIZE - 1, content_end)
+        worker_specs.append({
+            "role_config_file": PACKAGE_DIR / "roles" / "DesignContentWorker-hynix.yaml",
+            "render_vars": {
+                "markdown_file": markdown_file,
+                "prompt": req.designagent_prompt,
+                "template_dir": _HYNIX_TEMPLATE_DIR,
+                "slides_dir": str(slides_dir),
+                "start_page": page,
+                "end_page": chunk_end,
+            },
+            "worker_tag": f"chunk_{page}-{chunk_end}",
+        })
+        page = chunk_end + 1
+
+    worker_specs.append({
+        "role_config_file": PACKAGE_DIR / "roles" / "DesignReferencesWorker-hynix.yaml",
+        "render_vars": {
+            "prompt": req.designagent_prompt,
+            "template_dir": _HYNIX_TEMPLATE_DIR,
+            "slides_dir": str(slides_dir),
+            "ref_slide_no": references_slide_no,
+        },
+        "worker_tag": "references",
+    })
+
+    sem = asyncio.Semaphore(DESIGN_PARALLEL_CONCURRENCY)
+
+    async def _run_guarded(spec: dict) -> _WorkerResult:
+        async with sem:
+            return await _run_design_worker(
+                config, workspace, req,
+                role_config_file=spec["role_config_file"],
+                render_vars=spec["render_vars"],
+                finalize_agent_name="Design",
+                worker_tag=spec["worker_tag"],
+                language=language,
+                langfuse_handler=langfuse_handler,
+                session_id=session_id,
+            )
+
+    results = await asyncio.gather(*(_run_guarded(s) for s in worker_specs), return_exceptions=True)
+
+    end_page_src = Path(_HYNIX_TEMPLATE_DIR) / "end-page.html"
+    if end_page_src.exists():
+        shutil.copy(end_page_src, slides_dir / f"slide_{end_slide_no:02d}.html")
+    else:
+        warning(f"end-page.html not found in template dir {_HYNIX_TEMPLATE_DIR} — slide_{end_slide_no:02d}.html not created")
+
+    errors = [r for r in results if isinstance(r, BaseException)]
+    expected = {f"slide_{n:02d}.html" for n in range(1, total_slides + 1)}
+    actual = {p.name for p in slides_dir.glob("slide_*.html")}
+    missing = expected - actual
+    if errors or missing:
+        raise RuntimeError(
+            "Design parallel run incomplete — "
+            f"{len(errors)} worker(s) failed: {[str(e) for e in errors]}; "
+            f"missing slides: {sorted(missing)}"
+        )
+
+    worker_results: list[_WorkerResult] = [plan_result, *results]  # type: ignore[misc]
+    messages_log: list[dict] = []
+    turn_count = 0
+    cost = {"prompt": 0, "completion": 0, "total": 0}
+    all_calls: list[dict] = []
+    for wr in worker_results:
+        messages_log.extend(wr.messages_log)
+        turn_count += wr.turn_count
+        cost["prompt"] += wr.cost["prompt"]
+        cost["completion"] += wr.cost["completion"]
+        cost["total"] += wr.cost["total"]
+        all_calls.extend(wr.llm_call_log)
+
+    _save_llm_call_log(workspace, "Design-summary", all_calls)
+
+    return DesignGraphResult(
+        slides_dir=str(slides_dir),
+        messages_log=messages_log,
+        turn_count=turn_count,
         cost=cost,
     )
