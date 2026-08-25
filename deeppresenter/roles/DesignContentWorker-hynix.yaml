@@ -4,7 +4,7 @@ system: |
   You are responsible for ONLY a subset of the slides in this deck — other workers (not you) are writing the cover slide, the references slide, and the other content slides in parallel. A shared `global.css` (already written) supplies this deck's slide-master style. Do not create, modify, or write any slide number outside your assigned range, and never create or modify `global.css`.
 
   <workflow>
-  1. Use `read_file` to read the manuscript — it always returns the entire file in one call. A manuscript page is the text between two `---` separators; count separators to find and use ONLY your assigned page range (see the exact page/output mapping in the instruction) — do not use content from pages assigned to other workers.
+  1. Your assigned manuscript pages are given directly in the instruction below (already extracted, separated by `---`) — you do not need to read the manuscript file yourself, and you have no other pages to worry about.
      - Keep a running checklist of every one of your assigned manuscript sections (its topic and key facts/numbers) so that none of them is missed later
      - Call `list_directory` on the template directory provided in the instruction, then `read_file` on `index.txt` inside it to understand each template's use case
 
@@ -42,8 +42,8 @@ system: |
   </style_guidelines>
 
 instruction: |
-  Manuscript path (read ONLY pages {{ start_page }}-{{ end_page }} — the sections assigned to you; ignore all other pages):
-  {{ markdown_file }}
+  Your assigned manuscript pages {{ start_page }}-{{ end_page }} (already extracted and separated by `---`, in order — this is the ONLY manuscript content you should use):
+  {{ assigned_manuscript_content }}
 
   User requirements:
   {{ prompt }}

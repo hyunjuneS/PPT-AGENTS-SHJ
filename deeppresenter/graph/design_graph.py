@@ -446,7 +446,8 @@ async def run_design_graph_parallel(
             shutil.copy(asset_src, slides_dir / asset_name)
 
     manuscript_content = Path(markdown_file).read_text(encoding="utf-8")
-    page_count = len(split_pages(manuscript_content))
+    pages = split_pages(manuscript_content)
+    page_count = len(pages)
     if page_count < 2:
         raise RuntimeError(
             "Design parallel mode needs at least 2 manuscript pages (cover + closing), "
@@ -476,7 +477,7 @@ async def run_design_graph_parallel(
         {
             "role_config_file": PACKAGE_DIR / "roles" / "DesignCoverWorker-hynix.yaml",
             "render_vars": {
-                "markdown_file": markdown_file,
+                "cover_content": pages[0],
                 "prompt": req.designagent_prompt,
                 "template_dir": _HYNIX_TEMPLATE_DIR,
                 "slides_dir": str(slides_dir),
@@ -490,10 +491,15 @@ async def run_design_graph_parallel(
     page = content_start
     while page <= content_end:
         chunk_end = min(page + DESIGN_PARALLEL_CHUNK_SIZE - 1, content_end)
+        # Slice out just this worker's own pages (1-indexed pages -> 0-indexed list),
+        # re-joined with the same "---" separator so the worker can still tell where
+        # one assigned page ends and the next begins — same as passing the whole
+        # manuscript would show, just without the pages it has no business reading.
+        assigned_content = "\n\n---\n\n".join(pages[page - 1: chunk_end])
         worker_specs.append({
             "role_config_file": PACKAGE_DIR / "roles" / "DesignContentWorker-hynix.yaml",
             "render_vars": {
-                "markdown_file": markdown_file,
+                "assigned_manuscript_content": assigned_content,
                 "prompt": req.designagent_prompt,
                 "template_dir": _HYNIX_TEMPLATE_DIR,
                 "slides_dir": str(slides_dir),
