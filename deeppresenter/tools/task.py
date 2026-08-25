@@ -98,7 +98,7 @@ async def screenshot_slide(
             pass
 
     if _retry:
-        debug("Retrying screenshot_slide once after failure")
+        warning("Retrying screenshot_slide once after failure")
         return await screenshot_slide(html_file, aspect_ratio, image_format, _retry=False)
 
     return None, None
