@@ -22,6 +22,12 @@ DESIGN_PARALLEL_MODE = os.getenv("DESIGN_PARALLEL_MODE", "").lower() in ("1", "t
 DESIGN_PARALLEL_CHUNK_SIZE = int(os.getenv("DESIGN_PARALLEL_CHUNK_SIZE", 3))
 DESIGN_PARALLEL_CONCURRENCY = int(os.getenv("DESIGN_PARALLEL_CONCURRENCY", 4))
 
+# screenshot_slide's max attempts on Chromium/render failure (1 = no retry). Bounded —
+# never set this up via an unconditional "retry forever" loop, since a persistent
+# failure (e.g. resource contention under heavy concurrency) would then never
+# terminate on its own.
+SCREENSHOT_MAX_RETRIES = int(os.getenv("SCREENSHOT_MAX_RETRIES", 5))
+
 WORKSPACE_BASE = Path(
     os.getenv(
         "DEEPPRESENTER_WORKSPACE_BASE",
