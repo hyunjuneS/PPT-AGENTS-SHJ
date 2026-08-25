@@ -183,11 +183,14 @@ def finalize(outcome: str, agent_name: str = "") -> str:
             return "All HTML files should be named slide_NN.html"
 
     elif agent_name == "DesignPlan":
-        # Phase A of parallel Design (design_graph.py's run_design_plan_phase) only
-        # produces the shared global.css slide-master style — no slide_*.html yet,
-        # so it can't use the "Design" branch's html-file check above.
+        # Phase A of parallel Design (design_graph.py's run_design_plan_phase) produces
+        # the shared global.css slide-master style AND a per-slide template_manifest.json
+        # (which template each content worker must use) — no slide_*.html yet, so it
+        # can't use the "Design" branch's html-file check above.
         if not (path / "global.css").exists():
             return "Outcome path should be the slides/ directory containing global.css"
+        if not (path / "template_manifest.json").exists():
+            return "Outcome path should also contain template_manifest.json (per-slide template assignments)"
 
     debug(f"Agent {agent_name} finalized outcome: {outcome}")
     return outcome

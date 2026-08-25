@@ -390,13 +390,20 @@ async def run_design_plan_phase(
     workspace: Path,
     req: InputRequest,
     markdown_file: str,
+    page_count: int,
     language: str = "en",
     langfuse_handler=None,
     session_id: str | None = None,
 ) -> _WorkerResult:
     """Phase A of parallel Design: decides the deck's shared slide-master style
-    and saves slides/global.css. Run alone (awaited before any other worker
-    starts) since every other worker's slides link to this file."""
+    (slides/global.css) AND, since it's the only worker that sees the whole
+    manuscript and template catalog at once, which template each content slide
+    (page 2..page_count) should use (slides/template_manifest.json) — so that
+    choice, and the "don't repeat the same template 3x in a row" rule, are made
+    correctly across the whole deck instead of only within each content worker's
+    own chunk. Run alone (awaited before any other worker starts) since every
+    other worker's slides link to global.css, and content workers need their
+    template assignment before they can start."""
     workspace = Path(workspace)
     slides_dir = workspace / "slides"
     slides_dir.mkdir(parents=True, exist_ok=True)
@@ -406,6 +413,8 @@ async def run_design_plan_phase(
         "prompt": req.designagent_prompt,
         "template_dir": _HYNIX_TEMPLATE_DIR,
         "slides_dir": str(slides_dir),
+        "content_start": 2,
+        "content_end": page_count,
     }
     return await _run_design_worker(
         config, workspace, req,
@@ -461,7 +470,7 @@ async def run_design_graph_parallel(
     show_agent_start("Design-parallel", None)
 
     plan_result = await run_design_plan_phase(
-        config, workspace, req, markdown_file,
+        config, workspace, req, markdown_file, page_count,
         language=language, langfuse_handler=langfuse_handler, session_id=session_id,
     )
 
@@ -472,6 +481,20 @@ async def run_design_graph_parallel(
     # per worker. Workers are separate conversations from Phase A, so they have no
     # other way to know what's actually inside global.css.
     global_css_content = (slides_dir / "global.css").read_text(encoding="utf-8")
+
+    # Same reasoning for the per-slide template assignments Phase A just decided
+    # (slides/template_manifest.json): read once here and slice out each content
+    # worker's own pages below, instead of making every worker separately explore
+    # the template catalog to pick (and risk 11 workers disagreeing on) a template.
+    template_manifest_raw = json.loads((slides_dir / "template_manifest.json").read_text(encoding="utf-8"))
+    template_manifest: dict[int, str] = {}
+    for page_no in range(2, page_count + 1):
+        template_name = template_manifest_raw.get(str(page_no))
+        if not template_name:
+            raise RuntimeError(
+                f"Design plan phase's template_manifest.json is missing an assignment for page {page_no}"
+            )
+        template_manifest[page_no] = template_name
 
     worker_specs: list[dict] = [
         {
@@ -506,6 +529,7 @@ async def run_design_graph_parallel(
                 "start_page": page,
                 "end_page": chunk_end,
                 "global_css_content": global_css_content,
+                "template_assignments": {p: template_manifest[p] for p in range(page, chunk_end + 1)},
             },
             "worker_tag": f"chunk_{page}-{chunk_end}",
         })
