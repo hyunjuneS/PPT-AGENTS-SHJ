@@ -464,6 +464,14 @@ async def run_design_graph_parallel(
         language=language, langfuse_handler=langfuse_handler, session_id=session_id,
     )
 
+    # Read once and embed directly into every downstream worker's instruction text
+    # (rather than just telling them the file exists and letting them read_file it
+    # themselves) — this guarantees every worker actually sees Phase A's color/font
+    # choices before it starts generating, and skips an extra read_file round trip
+    # per worker. Workers are separate conversations from Phase A, so they have no
+    # other way to know what's actually inside global.css.
+    global_css_content = (slides_dir / "global.css").read_text(encoding="utf-8")
+
     worker_specs: list[dict] = [
         {
             "role_config_file": PACKAGE_DIR / "roles" / "DesignCoverWorker-hynix.yaml",
@@ -472,6 +480,7 @@ async def run_design_graph_parallel(
                 "prompt": req.designagent_prompt,
                 "template_dir": _HYNIX_TEMPLATE_DIR,
                 "slides_dir": str(slides_dir),
+                "global_css_content": global_css_content,
             },
             "worker_tag": "cover",
         },
@@ -490,6 +499,7 @@ async def run_design_graph_parallel(
                 "slides_dir": str(slides_dir),
                 "start_page": page,
                 "end_page": chunk_end,
+                "global_css_content": global_css_content,
             },
             "worker_tag": f"chunk_{page}-{chunk_end}",
         })
@@ -502,6 +512,7 @@ async def run_design_graph_parallel(
             "template_dir": _HYNIX_TEMPLATE_DIR,
             "slides_dir": str(slides_dir),
             "ref_slide_no": references_slide_no,
+            "global_css_content": global_css_content,
         },
         "worker_tag": "references",
     })

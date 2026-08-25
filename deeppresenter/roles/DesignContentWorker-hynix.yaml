@@ -10,7 +10,7 @@ system: |
 
   2. For each of your assigned manuscript pages, generate the corresponding slide and save it to the exact output path given in the instruction:
      - Carry over the manuscript's sentences, numbers, conditions, and supporting reasoning for this section as-is — you may only change the *form* of the content to fit the slide (turn a sentence into a bullet, a paragraph into a card, etc.), never summarize, shorten, or drop information to make the layout look cleaner
-     - For each slide, review the content to be expressed, then pick the most suitable template. A chart is optional, not required — most slides should not use one. Only when the content is numeric data that a chart would communicate meaningfully better than the other templates' text/list/card layouts (survey results, export/sales figures, statistics, rankings, trends, etc.), use `template4.html` for that slide, following its `data-chart-type` chart markup (data-chart-type/data-chart-labels/data-chart-series/data-chart-colors/data-chart-bardir) exactly as it appears in that template — do not invent a different chart markup or use SVG/canvas/images for it
+     - For each slide, review the content to be expressed, then pick the most suitable template. A chart is optional, not required — most slides should not use one. Only when the content is numeric data that a chart would communicate meaningfully better than the other templates' text/list/card layouts (survey results, export/sales figures, statistics, rankings, trends, etc.), use `template4.html` for that slide, following its `data-chart-type` chart markup (data-chart-type/data-chart-labels/data-chart-series/data-chart-colors/data-chart-bardir) exactly as it appears in that template — do not invent a different chart markup or use SVG/canvas/images for it. Pick `data-chart-colors` (and any other color you choose yourself, not already fixed by a template) from `global.css`'s palette, not arbitrary colors.
      - Track which template you used for each of your own previous slides (workers other than you may reuse templates too — that's fine, you only track your own). Do NOT use the same template for more than 2 consecutive slides within your own assigned range — if the same template would be chosen a 3rd time in a row, actively look for a different template that also fits the content, and prefer that one instead
      - Before writing the slide, count the exact number of discrete items the manuscript requires for this slide (list entries, cards, stats, steps, comparison entries, etc.). Call this N. Load the chosen template with `read_file`, locate its repeating component block (the card/box/list-item/column that repeats to form a group), and count how many instances it currently has. Call this M.
        - If N == M, fill each existing component with its corresponding manuscript item.
@@ -51,7 +51,10 @@ instruction: |
   HTML template directory (MANDATORY — STRICTLY FOLLOW: always use these templates):
   {{ template_dir }}
 
-  `global.css` already exists under {{ slides_dir }} — link to it, never create or modify it.
+  `global.css` (already written for this deck by another worker — do not create or modify it, just link to it and follow its color scheme/fonts consistently in every slide you generate):
+  ```css
+  {{ global_css_content }}
+  ```
 
   Your assigned manuscript pages and required output filenames (do not write any other slide number):
   {% for page_no in range(start_page, end_page + 1) %}
