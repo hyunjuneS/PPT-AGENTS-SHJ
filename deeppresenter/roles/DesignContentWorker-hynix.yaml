@@ -7,10 +7,10 @@ system: |
   1. Your assigned manuscript pages are given directly in the instruction below (already extracted, separated by `---`) — you do not need to read the manuscript file yourself, and you have no other pages to worry about.
      - Keep a running checklist of every one of your assigned manuscript sections (its topic and key facts/numbers) so that none of them is missed later
 
-  2. For each of your assigned manuscript pages, `read_file` its assigned template file (exact path given in the instruction below), then generate the corresponding slide using that exact template and save it to the exact output path given in the instruction:
+  2. For each of your assigned manuscript pages, its assigned template's exact HTML is already given directly in the instruction below (you do not need to read_file it) — generate the corresponding slide using that exact template and save it to the exact output path given in the instruction:
      - Carry over the manuscript's sentences, numbers, conditions, and supporting reasoning for this section as-is — you may only change the *form* of the content to fit the slide (turn a sentence into a bullet, a paragraph into a card, etc.), never summarize, shorten, or drop information to make the layout look cleaner
      - If your assigned template is `template4.html`, follow its `data-chart-type` chart markup (data-chart-type/data-chart-labels/data-chart-series/data-chart-colors/data-chart-bardir) exactly as it appears in that template — do not invent a different chart markup or use SVG/canvas/images for it. Pick `data-chart-colors` (and any other color you choose yourself, not already fixed by the template) from `global.css`'s palette, not arbitrary colors.
-     - Before writing the slide, count the exact number of discrete items the manuscript requires for this slide (list entries, cards, stats, steps, comparison entries, etc.). Call this N. In the template file you just read, locate its repeating component block (the card/box/list-item/column that repeats to form a group), and count how many instances it currently has. Call this M.
+     - Before writing the slide, count the exact number of discrete items the manuscript requires for this slide (list entries, cards, stats, steps, comparison entries, etc.). Call this N. In the assigned template's markup given to you, locate its repeating component block (the card/box/list-item/column that repeats to form a group), and count how many instances it currently has. Call this M.
        - If N == M, fill each existing component with its corresponding manuscript item.
        - If N > M, duplicate the repeating component's HTML node (and any CSS rule scoped to it) N-M more times so there are exactly N components. Keep each component's internal styling (colors, font, borders, icons, padding) unchanged — only the group container's sizing changes: proportionally shrink each item's width/height, or increase the grid/flex column count, so all N items fit inside the original container bounds without overlap or overflow.
        - If N < M, delete the extra unused component nodes entirely (do not leave empty or placeholder cards) and proportionally enlarge the remaining N components to fill the freed space evenly.
@@ -50,9 +50,12 @@ instruction: |
   {{ global_css_content }}
   ```
 
-  Your assigned manuscript pages, required output filenames, and the exact template already assigned to each by the planning phase (do not write any other slide number, and do not use a different template than the one listed for each page):
+  Your assigned manuscript pages, required output filenames, and the exact template (its full HTML given inline) already assigned to each by the planning phase (do not write any other slide number, and do not use a different template than the one shown for each page):
   {% for page_no in range(start_page, end_page + 1) %}
-  - Manuscript page {{ page_no }} → {{ slides_dir }}/slide_{{ '%02d' % page_no }}.html using {{ template_dir }}/{{ template_assignments[page_no] }}
+  - Manuscript page {{ page_no }} → {{ slides_dir }}/slide_{{ '%02d' % page_no }}.html using template "{{ template_assignments[page_no] }}":
+    ```html
+    {{ template_contents[page_no] }}
+    ```
   {% endfor %}
 
   When all of the above slides are generated and verified, call finalize with this path as the outcome:
@@ -63,7 +66,6 @@ use_model: design_agent
 toolset:
   include_tool_servers: []
   include_tools:
-    - read_file
     - write_file
     - edit_file
     - inspect_slide
