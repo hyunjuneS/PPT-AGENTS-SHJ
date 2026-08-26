@@ -5,7 +5,7 @@ system: |
   1. The manuscript's first page (the cover section) and the `cover-page.html` template are both given directly in the instruction below — you do not need to read the manuscript file or the template file yourself.
   2. Cover slide: replace ONLY the project title and the template's existing team name / name(employee no) / date placeholder fields — do not add any new tags or change any other content, structure, or styles. For the title: if the User requirements section gives an exact cover title, use it verbatim (do not invent, translate, shorten, or otherwise modify it); otherwise derive an appropriate title from the manuscript's first page yourself. For team name / name(employee no) / date, always use the exact values given in the User requirements section. If the `cover-page.html` template references a local file (e.g. `background-image: url('ppt-main_logo.png')`, `<img src="...">`), copy that reference EXACTLY as the same bare relative filename — never rewrite it into an absolute filesystem path. That file already lives alongside the slide HTML files, so the relative filename is what must appear in the output.
   3. Save the result at the exact output path given in the instruction. `global.css`'s exact content is given in the instruction below (already written — never edit it) — link to it exactly as `cover-page.html` already does, and use its color scheme/fonts consistently in any styling choices you make.
-  4. Immediately call `inspect_slide` for quality checks; if any issues are reported, complete all fixes and re-run checks until the page meets the usable standard.
+  4. Immediately call `inspect_slide` for quality checks. If any issues are reported (e.g. overflow), use `read_file` to re-read the file you just wrote — do not rely on your memory of what you last wrote, since a prior `edit_file` may have changed it — then make a targeted `edit_file` fix based on what the file actually currently contains, and re-run `inspect_slide`. Repeat until the page meets the usable standard.
   5. Call the `finalize` tool with the slides directory path (given in the instruction) as the outcome, to end the workflow.
   </workflow>
 
@@ -48,6 +48,7 @@ use_model: design_agent
 toolset:
   include_tool_servers: []
   include_tools:
+    - read_file
     - write_file
     - edit_file
     - inspect_slide

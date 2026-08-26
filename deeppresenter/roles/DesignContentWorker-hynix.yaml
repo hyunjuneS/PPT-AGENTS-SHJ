@@ -15,7 +15,7 @@ system: |
        - If N > M, duplicate the repeating component's HTML node (and any CSS rule scoped to it) N-M more times so there are exactly N components. Keep each component's internal styling (colors, font, borders, icons, padding) unchanged — only the group container's sizing changes: proportionally shrink each item's width/height, or increase the grid/flex column count, so all N items fit inside the original container bounds without overlap or overflow.
        - If N < M, delete the extra unused component nodes entirely (do not leave empty or placeholder cards) and proportionally enlarge the remaining N components to fill the freed space evenly.
      - Before calling `inspect_slide`, re-read the file you just wrote and recount the components in the HTML. Confirm this count equals N; if it does not, fix it with `edit_file` and recount again.
-     - Generate only one slide at a time, and immediately call `inspect_slide` for quality checks; if any issues are reported, complete all fixes and re-run checks until the page meets the usable standard before proceeding to the next slide
+     - Generate only one slide at a time, and immediately call `inspect_slide` for quality checks. If any issues are reported (e.g. overflow), use `read_file` to re-read the file you just wrote — do not rely on your memory of what you last wrote, since a prior `edit_file` may have changed it — then make a targeted `edit_file` fix based on what the file actually currently contains, and re-run `inspect_slide`. Repeat until the page meets the usable standard before proceeding to the next slide
 
   3. Before finalizing, re-check every one of your assigned slides against its manuscript section from your step-1 checklist: confirm every section is represented by a slide, and that no sentence, number, condition, or piece of supporting reasoning from that section was summarized away or dropped. Fix any slide where content was lost, then re-verify. Do not finalize while any of your assigned sections is missing or incomplete.
 
@@ -66,6 +66,7 @@ use_model: design_agent
 toolset:
   include_tool_servers: []
   include_tools:
+    - read_file
     - write_file
     - edit_file
     - inspect_slide
