@@ -474,24 +474,17 @@ async def run_design_graph_parallel(
         language=language, langfuse_handler=langfuse_handler, session_id=session_id,
     )
 
-    # Read once and embed directly into every downstream worker's instruction text
-    # (rather than just telling them the file exists and letting them read_file it
-    # themselves) — this guarantees every worker actually sees Phase A's color/font
-    # choices before it starts generating, and skips an extra read_file round trip
-    # per worker. Workers are separate conversations from Phase A, so they have no
-    # other way to know what's actually inside global.css.
-    global_css_content = (slides_dir / "global.css").read_text(encoding="utf-8")
-
-    # Same reasoning for the per-slide template assignments Phase A just decided
-    # (slides/template_manifest.json): read once here and slice out each content
-    # worker's own pages below, instead of making every worker separately explore
-    # the template catalog to pick (and risk 11 workers disagreeing on) a template.
+    # global.css and template_manifest.json are both read directly by each worker
+    # via read_file(slides_dir/<fixed filename>) — no list_directory needed, since
+    # slides_dir is already given to every worker and both filenames are fixed, not
+    # something that needs discovering. This validation-only read is still done here
+    # so a bad manifest fails fast, before any worker starts, rather than confusing
+    # N workers independently.
     template_manifest_raw = json.loads((slides_dir / "template_manifest.json").read_text(encoding="utf-8"))
     # template*.html only — cover-page.html/references-page.html/end-page.html are
     # special-purpose and must never be assignable to a content slide, even if the
     # LLM names one of them verbatim.
     valid_template_names = {p.name for p in Path(_HYNIX_TEMPLATE_DIR).glob("template*.html")}
-    template_manifest: dict[int, str] = {}
     for page_no in range(2, page_count + 1):
         template_name = template_manifest_raw.get(str(page_no))
         if not template_name:
@@ -504,7 +497,6 @@ async def run_design_graph_parallel(
                 f'"{template_name}", which does not exist in {_HYNIX_TEMPLATE_DIR} '
                 f"(valid: {sorted(valid_template_names)})"
             )
-        template_manifest[page_no] = template_name
 
     worker_specs: list[dict] = [
         {
@@ -514,7 +506,6 @@ async def run_design_graph_parallel(
                 "prompt": req.designagent_prompt,
                 "template_dir": _HYNIX_TEMPLATE_DIR,
                 "slides_dir": str(slides_dir),
-                "global_css_content": global_css_content,
             },
             "worker_tag": "cover",
         },
@@ -529,7 +520,6 @@ async def run_design_graph_parallel(
         # one assigned page ends and the next begins — same as passing the whole
         # manuscript would show, just without the pages it has no business reading.
         assigned_content = "\n\n---\n\n".join(pages[page - 1: chunk_end])
-        worker_page_templates = {p: template_manifest[p] for p in range(page, chunk_end + 1)}
         worker_specs.append({
             "role_config_file": PACKAGE_DIR / "roles" / "DesignContentWorker-hynix.yaml",
             "render_vars": {
@@ -539,8 +529,6 @@ async def run_design_graph_parallel(
                 "slides_dir": str(slides_dir),
                 "start_page": page,
                 "end_page": chunk_end,
-                "global_css_content": global_css_content,
-                "template_assignments": worker_page_templates,
             },
             "worker_tag": f"chunk_{page}-{chunk_end}",
         })
@@ -553,7 +541,6 @@ async def run_design_graph_parallel(
             "template_dir": _HYNIX_TEMPLATE_DIR,
             "slides_dir": str(slides_dir),
             "ref_slide_no": references_slide_no,
-            "global_css_content": global_css_content,
         },
         "worker_tag": "references",
     })

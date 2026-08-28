@@ -4,7 +4,7 @@ system: |
   <workflow>
   1. Use `read_file` to read `references-page.html` from the template directory given in the instruction.
   2. Replace ONLY its reference/filename placeholder field(s) with the exact reference value given in the User requirements section — do not look it up yourself, derive it from `sources/` or any other file, or invent your own, and do not add any new tags or change any other content, structure, or styles, EXCEPT the footer, which you may freely edit. If `references-page.html` references a local file (e.g. an image path), copy that reference EXACTLY as the same bare relative filename — never rewrite it into an absolute filesystem path.
-  3. Save the result at the exact output path given in the instruction. `global.css`'s exact content is given in the instruction below (already written — never edit it) — link to it exactly as `references-page.html` already does, and use its color scheme/fonts consistently if you touch the footer's styling.
+  3. Use `read_file` to read `global.css` from the slides directory given in the instruction (already written by another worker — never edit it). Save the result at the exact output path given in the instruction, linking to `global.css` exactly as `references-page.html` already does, and use its color scheme/fonts consistently if you touch the footer's styling.
   4. Immediately call `inspect_slide` for quality checks. If any issues are reported (e.g. overflow), use `read_file` to re-read the file you just wrote — do not rely on your memory of what you last wrote, since a prior `edit_file` may have changed it — then make a targeted `edit_file` fix based on what the file actually currently contains, and re-run `inspect_slide`. Repeat until the page meets the usable standard.
   5. Call the `finalize` tool with the slides directory path (given in the instruction) as the outcome, to end the workflow.
   </workflow>
@@ -27,10 +27,8 @@ instruction: |
   HTML template directory (MANDATORY — STRICTLY FOLLOW; read `references-page.html` from here with `read_file`):
   {{ template_dir }}
 
-  `global.css` (already written for this deck by another worker — do not create or modify it, just link to it and follow its color scheme/fonts):
-  ```css
-  {{ global_css_content }}
-  ```
+  Slides directory (contains `global.css`, already written by another worker — read it with `read_file` at {{ slides_dir }}/global.css; never create or modify it):
+  {{ slides_dir }}
 
   Save your slide at exactly this path:
   {{ slides_dir }}/slide_{{ '%02d' % ref_slide_no }}.html
