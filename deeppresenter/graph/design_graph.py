@@ -538,9 +538,14 @@ async def run_design_graph_parallel(
         # manuscript would show, just without the pages it has no business reading.
         assigned_content = "\n\n---\n\n".join(pages[page - 1: chunk_end])
         worker_page_templates = {p: template_manifest[p] for p in range(page, chunk_end + 1)}
-        worker_template_contents = {
-            p: (Path(_HYNIX_TEMPLATE_DIR) / name).read_text(encoding="utf-8")
-            for p, name in worker_page_templates.items()
+        # Keyed by filename, not by page — a chunk commonly reuses the same template
+        # across more than one of its own pages (only ~4 templates exist in total), and
+        # keying by page would embed that template's full HTML once per page that uses
+        # it. That duplicate content would then sit in every turn of this worker's whole
+        # conversation (the full message history is resent on every call), not just once.
+        distinct_template_contents = {
+            name: (Path(_HYNIX_TEMPLATE_DIR) / name).read_text(encoding="utf-8")
+            for name in set(worker_page_templates.values())
         }
         worker_specs.append({
             "role_config_file": PACKAGE_DIR / "roles" / "DesignContentWorker-hynix.yaml",
@@ -552,7 +557,7 @@ async def run_design_graph_parallel(
                 "end_page": chunk_end,
                 "global_css_content": global_css_content,
                 "template_assignments": worker_page_templates,
-                "template_contents": worker_template_contents,
+                "template_contents": distinct_template_contents,
             },
             "worker_tag": f"chunk_{page}-{chunk_end}",
         })

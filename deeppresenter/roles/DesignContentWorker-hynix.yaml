@@ -50,12 +50,17 @@ instruction: |
   {{ global_css_content }}
   ```
 
-  Your assigned manuscript pages, required output filenames, and the exact template (its full HTML given inline) already assigned to each by the planning phase (do not write any other slide number, and do not use a different template than the one shown for each page):
-  {% for page_no in range(start_page, end_page + 1) %}
-  - Manuscript page {{ page_no }} → {{ slides_dir }}/slide_{{ '%02d' % page_no }}.html using template "{{ template_assignments[page_no] }}":
+  Template(s) assigned to your pages by the planning phase — full HTML given once per distinct filename below, even if more than one of your pages uses the same one:
+  {% for name, html in template_contents.items() %}
+  - "{{ name }}":
     ```html
-    {{ template_contents[page_no] }}
+    {{ html }}
     ```
+  {% endfor %}
+
+  Your assigned manuscript pages, required output filenames, and which of the templates above each one must use (do not write any other slide number, and do not use a different template than the one shown for each page):
+  {% for page_no in range(start_page, end_page + 1) %}
+  - Manuscript page {{ page_no }} → {{ slides_dir }}/slide_{{ '%02d' % page_no }}.html using template "{{ template_assignments[page_no] }}"
   {% endfor %}
 
   When all of the above slides are generated and verified, call finalize with this path as the outcome:
