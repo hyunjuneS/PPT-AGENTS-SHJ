@@ -506,23 +506,15 @@ async def run_design_graph_parallel(
             )
         template_manifest[page_no] = template_name
 
-    # Cover/references' fixed templates and each content page's assigned template are
-    # all read once here and embedded directly into the relevant worker's instruction
-    # (same pattern as global_css_content/assigned_manuscript_content above) — a worker
-    # then never needs read_file or list_directory just to see a template's markup, so
-    # its toolset shrinks to exactly write_file/edit_file/inspect_slide/finalize.
-    cover_template_content = (Path(_HYNIX_TEMPLATE_DIR) / "cover-page.html").read_text(encoding="utf-8")
-    references_template_content = (Path(_HYNIX_TEMPLATE_DIR) / "references-page.html").read_text(encoding="utf-8")
-
     worker_specs: list[dict] = [
         {
             "role_config_file": PACKAGE_DIR / "roles" / "DesignCoverWorker-hynix.yaml",
             "render_vars": {
                 "cover_content": pages[0],
                 "prompt": req.designagent_prompt,
+                "template_dir": _HYNIX_TEMPLATE_DIR,
                 "slides_dir": str(slides_dir),
                 "global_css_content": global_css_content,
-                "cover_template_content": cover_template_content,
             },
             "worker_tag": "cover",
         },
@@ -538,26 +530,17 @@ async def run_design_graph_parallel(
         # manuscript would show, just without the pages it has no business reading.
         assigned_content = "\n\n---\n\n".join(pages[page - 1: chunk_end])
         worker_page_templates = {p: template_manifest[p] for p in range(page, chunk_end + 1)}
-        # Keyed by filename, not by page — a chunk commonly reuses the same template
-        # across more than one of its own pages (only ~4 templates exist in total), and
-        # keying by page would embed that template's full HTML once per page that uses
-        # it. That duplicate content would then sit in every turn of this worker's whole
-        # conversation (the full message history is resent on every call), not just once.
-        distinct_template_contents = {
-            name: (Path(_HYNIX_TEMPLATE_DIR) / name).read_text(encoding="utf-8")
-            for name in set(worker_page_templates.values())
-        }
         worker_specs.append({
             "role_config_file": PACKAGE_DIR / "roles" / "DesignContentWorker-hynix.yaml",
             "render_vars": {
                 "assigned_manuscript_content": assigned_content,
                 "prompt": req.designagent_prompt,
+                "template_dir": _HYNIX_TEMPLATE_DIR,
                 "slides_dir": str(slides_dir),
                 "start_page": page,
                 "end_page": chunk_end,
                 "global_css_content": global_css_content,
                 "template_assignments": worker_page_templates,
-                "template_contents": distinct_template_contents,
             },
             "worker_tag": f"chunk_{page}-{chunk_end}",
         })
@@ -567,10 +550,10 @@ async def run_design_graph_parallel(
         "role_config_file": PACKAGE_DIR / "roles" / "DesignReferencesWorker-hynix.yaml",
         "render_vars": {
             "prompt": req.designagent_prompt,
+            "template_dir": _HYNIX_TEMPLATE_DIR,
             "slides_dir": str(slides_dir),
             "ref_slide_no": references_slide_no,
             "global_css_content": global_css_content,
-            "references_template_content": references_template_content,
         },
         "worker_tag": "references",
     })
