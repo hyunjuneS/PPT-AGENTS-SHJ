@@ -174,12 +174,20 @@ def build_graph(
         if usage:
             context_length = usage.get("total_tokens", context_length)
 
+        # input_token_details.cache_read is LangChain's standardized field for "how many
+        # of this call's input tokens were served from the backend's prompt/KV cache" —
+        # populated only if the gateway/backend actually reports it (e.g. OpenAI's
+        # prompt_tokens_details.cached_tokens). None here means the backend isn't
+        # reporting cache stats at all, not that caching definitely didn't happen.
+        input_token_details = (usage or {}).get("input_token_details") or {}
+
         call_record = {
             "turn": turn_count,
             "elapsed_seconds": round(elapsed, 3),
             "input_tokens": usage.get("input_tokens") if usage else None,
             "output_tokens": usage.get("output_tokens") if usage else None,
             "total_tokens": usage.get("total_tokens") if usage else None,
+            "cached_input_tokens": input_token_details.get("cache_read"),
             "input": [_dump_message(m) for m in messages],
             "output": _dump_message(response),
         }

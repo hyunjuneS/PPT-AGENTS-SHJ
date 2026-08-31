@@ -137,6 +137,7 @@ def _save_llm_call_log(workspace: Path, agent_name: str, calls: list[dict]) -> N
 
     total_elapsed = sum(c["elapsed_seconds"] for c in calls)
     token_totals = _sum_call_tokens(calls)
+    total_cached_input_tokens = sum(c.get("cached_input_tokens") or 0 for c in calls)
     with open(hist_dir / f"{agent_name}-llm-calls.json", "w", encoding="utf-8") as f:
         json.dump(
             {
@@ -146,6 +147,7 @@ def _save_llm_call_log(workspace: Path, agent_name: str, calls: list[dict]) -> N
                 "total_input_tokens": token_totals["prompt"],
                 "total_output_tokens": token_totals["completion"],
                 "total_tokens": token_totals["total"],
+                "total_cached_input_tokens": total_cached_input_tokens,
                 "calls": calls,
             },
             f,
