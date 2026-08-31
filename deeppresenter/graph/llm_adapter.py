@@ -30,15 +30,12 @@ def to_chat_openai(llm: LLM) -> ChatOpenAI:
         base_url=llm.base_url,
         api_key=llm.api_key,
         timeout=_DEFAULT_TIMEOUT,
-        # The openai SDK's own client-level retry (default 2, logged as "Retrying
-        # request to ... in Ns" from openai._base_client) is a second, invisible
-        # retry layer nested inside every single attempt engine.py's
-        # _invoke_with_retry sees — so on a failure that took 3 SDK-internal
-        # retries to finally surface, our own retry loop only ever sees 1 failed
-        # attempt, and .history/{agent}-llm-calls.json would be missing the other
-        # 2. Disabling it here makes engine.py's own retry loop (which already
-        # has its own backoff) the single source of retry behavior, so every real
-        # HTTP attempt is visible to — and logged by — that loop.
-        max_retries=0,
+        # openai SDK's own client-level retry (default 2, logged as "Retrying
+        # request to ... in Ns" from openai._base_client) is kept as-is — left
+        # unset here so it stays at its default rather than being disabled. It's
+        # a second retry layer nested inside every attempt engine.py's own
+        # _invoke_with_retry sees, so .history/{agent}-llm-calls.json records one
+        # "failed" entry per outer attempt even when the SDK silently retried a
+        # few times underneath it first.
         **llm.sampling_parameters,
     )
