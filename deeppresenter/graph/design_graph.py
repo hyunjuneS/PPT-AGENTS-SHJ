@@ -125,21 +125,38 @@ def _save_history(
         )
 
 
+def _sum_call_tokens(calls: list[dict]) -> dict:
+    """Sums each call's input/output/total tokens (engine.py's agent_node stamps these
+    from the response's usage_metadata) into the same {prompt, completion, total} shape
+    -config.json's "cost" has always used — single source for both files instead of
+    two independent walks that happen to compute the same thing."""
+    return {
+        "prompt": sum(c.get("input_tokens") or 0 for c in calls),
+        "completion": sum(c.get("output_tokens") or 0 for c in calls),
+        "total": sum(c.get("total_tokens") or 0 for c in calls),
+    }
+
+
 def _save_llm_call_log(workspace: Path, agent_name: str, calls: list[dict]) -> None:
     """Writes .history/{agent}-llm-calls.json: one entry per LLM call this run made
-    (engine.py's agent_node), each with its turn number, exact input messages, output
-    message, and how long that single request took — plus the summed total across every
-    call, so total LLM wall-clock time for the run is visible without adding it up by hand."""
+    (engine.py's agent_node), each with its turn number, input/output/total token counts,
+    exact input messages, output message, and how long that single request took — plus the
+    summed total elapsed time and token counts across every call, so both are visible
+    without adding them up by hand."""
     hist_dir = workspace / ".history"
     hist_dir.mkdir(parents=True, exist_ok=True)
 
     total_elapsed = sum(c["elapsed_seconds"] for c in calls)
+    token_totals = _sum_call_tokens(calls)
     with open(hist_dir / f"{agent_name}-llm-calls.json", "w", encoding="utf-8") as f:
         json.dump(
             {
                 "agent": agent_name,
                 "call_count": len(calls),
                 "total_elapsed_seconds": round(total_elapsed, 3),
+                "total_input_tokens": token_totals["prompt"],
+                "total_output_tokens": token_totals["completion"],
+                "total_tokens": token_totals["total"],
                 "calls": calls,
             },
             f,
@@ -233,24 +250,19 @@ async def run_design_graph(
         raise RuntimeError("Design agent did not call finalize with a confirmed outcome.")
 
     messages_log: list[dict] = []
-    prompt_tokens = completion_tokens = total_tokens = 0
     for m in final_state["messages"]:
         if isinstance(m, AIMessage):
             messages_log.append({"role": "assistant", "text": _message_preview(m.content)})
-            usage = getattr(m, "usage_metadata", None)
-            if usage:
-                prompt_tokens += usage.get("input_tokens", 0) or 0
-                completion_tokens += usage.get("output_tokens", 0) or 0
-                total_tokens += usage.get("total_tokens", 0) or 0
         elif isinstance(m, ToolMessage):
             messages_log.append({"role": "tool", "text": _message_preview(m.content)})
 
-    cost = {"prompt": prompt_tokens, "completion": completion_tokens, "total": total_tokens}
+    llm_call_log = final_state.get("llm_call_log", [])
+    cost = _sum_call_tokens(llm_call_log)
 
     _save_history(
-        workspace, "Design", final_state["messages"], llm.model_name, total_tokens, cost, tool_names
+        workspace, "Design", final_state["messages"], llm.model_name, cost["total"], cost, tool_names
     )
-    _save_llm_call_log(workspace, "Design", final_state.get("llm_call_log", []))
+    _save_llm_call_log(workspace, "Design", llm_call_log)
 
     return DesignGraphResult(
         slides_dir=slides_dir,
@@ -356,24 +368,19 @@ async def _run_design_worker(
         raise RuntimeError(f"Design worker '{worker_tag}' did not call finalize with a confirmed outcome.")
 
     messages_log: list[dict] = []
-    prompt_tokens = completion_tokens = total_tokens = 0
     for m in final_state["messages"]:
         if isinstance(m, AIMessage):
             messages_log.append({"role": "assistant", "text": _message_preview(m.content), "worker": worker_tag})
-            usage = getattr(m, "usage_metadata", None)
-            if usage:
-                prompt_tokens += usage.get("input_tokens", 0) or 0
-                completion_tokens += usage.get("output_tokens", 0) or 0
-                total_tokens += usage.get("total_tokens", 0) or 0
         elif isinstance(m, ToolMessage):
             messages_log.append({"role": "tool", "text": _message_preview(m.content), "worker": worker_tag})
 
-    cost = {"prompt": prompt_tokens, "completion": completion_tokens, "total": total_tokens}
+    llm_call_log = final_state.get("llm_call_log", [])
+    cost = _sum_call_tokens(llm_call_log)
 
     _save_history(
-        workspace, agent_label, final_state["messages"], llm.model_name, total_tokens, cost, tool_names
+        workspace, agent_label, final_state["messages"], llm.model_name, cost["total"], cost, tool_names
     )
-    _save_llm_call_log(workspace, agent_label, final_state.get("llm_call_log", []))
+    _save_llm_call_log(workspace, agent_label, llm_call_log)
 
     return _WorkerResult(
         tag=worker_tag,
@@ -381,7 +388,7 @@ async def _run_design_worker(
         messages_log=messages_log,
         turn_count=final_state["turn_count"],
         cost=cost,
-        llm_call_log=final_state.get("llm_call_log", []),
+        llm_call_log=llm_call_log,
     )
 
 

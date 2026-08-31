@@ -177,6 +177,9 @@ def build_graph(
         call_record = {
             "turn": turn_count,
             "elapsed_seconds": round(elapsed, 3),
+            "input_tokens": usage.get("input_tokens") if usage else None,
+            "output_tokens": usage.get("output_tokens") if usage else None,
+            "total_tokens": usage.get("total_tokens") if usage else None,
             "input": [_dump_message(m) for m in messages],
             "output": _dump_message(response),
         }
