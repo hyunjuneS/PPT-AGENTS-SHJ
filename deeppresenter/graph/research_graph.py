@@ -199,7 +199,7 @@ async def run_research_graph(
         )
 
         show_agent_start("Research", None)
-        graph = build_graph(chat_model, tools, context_window=config.context_window)
+        graph, call_log = build_graph(chat_model, tools, context_window=config.context_window)
 
         initial_state = {
             "messages": [
@@ -222,7 +222,15 @@ async def run_research_graph(
             if session_id:
                 run_config["metadata"] = {"langfuse_session_id": session_id}
 
-        final_state = await graph.ainvoke(initial_state, config=run_config)
+        try:
+            final_state = await graph.ainvoke(initial_state, config=run_config)
+        except Exception:
+            # call_log already holds every attempt made so far (including failed/
+            # retried ones — see engine.py's build_graph), so it's saved here even
+            # though a run that never returns final_state would otherwise leave no
+            # .history trace at all.
+            _save_llm_call_log(workspace, "Research", call_log)
+            raise
 
     manuscript_path = final_state.get("final_outcome")
     if not manuscript_path:
@@ -235,13 +243,12 @@ async def run_research_graph(
         elif isinstance(m, ToolMessage):
             messages_log.append({"role": "tool", "text": _message_preview(m.content)})
 
-    llm_call_log = final_state.get("llm_call_log", [])
-    cost = _sum_call_tokens(llm_call_log)
+    cost = _sum_call_tokens(call_log)
 
     _save_history(
         workspace, "Research", final_state["messages"], llm.model_name, cost["total"], cost, tool_names
     )
-    _save_llm_call_log(workspace, "Research", llm_call_log)
+    _save_llm_call_log(workspace, "Research", call_log)
 
     return ResearchGraphResult(
         manuscript_path=manuscript_path,

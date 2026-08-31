@@ -222,7 +222,7 @@ async def run_design_graph(
         )
 
         show_agent_start("Design", None)
-        graph = build_graph(chat_model, tools, context_window=config.context_window)
+        graph, call_log = build_graph(chat_model, tools, context_window=config.context_window)
 
         initial_state = {
             "messages": [
@@ -245,7 +245,15 @@ async def run_design_graph(
             if session_id:
                 run_config["metadata"] = {"langfuse_session_id": session_id}
 
-        final_state = await graph.ainvoke(initial_state, config=run_config)
+        try:
+            final_state = await graph.ainvoke(initial_state, config=run_config)
+        except Exception:
+            # call_log is populated as calls happen (see engine.py's build_graph), so it
+            # already holds every attempt — including failed/retried ones — made before
+            # whatever just made this run fail. Saved here since a run that never
+            # returns final_state would otherwise leave no .history trace at all.
+            _save_llm_call_log(workspace, "Design", call_log)
+            raise
 
     slides_dir = final_state.get("final_outcome")
     if not slides_dir:
@@ -258,13 +266,12 @@ async def run_design_graph(
         elif isinstance(m, ToolMessage):
             messages_log.append({"role": "tool", "text": _message_preview(m.content)})
 
-    llm_call_log = final_state.get("llm_call_log", [])
-    cost = _sum_call_tokens(llm_call_log)
+    cost = _sum_call_tokens(call_log)
 
     _save_history(
         workspace, "Design", final_state["messages"], llm.model_name, cost["total"], cost, tool_names
     )
-    _save_llm_call_log(workspace, "Design", llm_call_log)
+    _save_llm_call_log(workspace, "Design", call_log)
 
     return DesignGraphResult(
         slides_dir=slides_dir,
@@ -340,7 +347,7 @@ async def _run_design_worker(
 
         agent_label = f"Design-{worker_tag}"
         show_agent_start(agent_label, None)
-        graph = build_graph(chat_model, tools, context_window=config.context_window)
+        graph, call_log = build_graph(chat_model, tools, context_window=config.context_window)
 
         initial_state = {
             "messages": [
@@ -363,7 +370,11 @@ async def _run_design_worker(
             if session_id:
                 run_config["metadata"] = {"langfuse_session_id": session_id}
 
-        final_state = await graph.ainvoke(initial_state, config=run_config)
+        try:
+            final_state = await graph.ainvoke(initial_state, config=run_config)
+        except Exception:
+            _save_llm_call_log(workspace, agent_label, call_log)
+            raise
 
     slides_dir = final_state.get("final_outcome")
     if not slides_dir:
@@ -376,13 +387,12 @@ async def _run_design_worker(
         elif isinstance(m, ToolMessage):
             messages_log.append({"role": "tool", "text": _message_preview(m.content), "worker": worker_tag})
 
-    llm_call_log = final_state.get("llm_call_log", [])
-    cost = _sum_call_tokens(llm_call_log)
+    cost = _sum_call_tokens(call_log)
 
     _save_history(
         workspace, agent_label, final_state["messages"], llm.model_name, cost["total"], cost, tool_names
     )
-    _save_llm_call_log(workspace, agent_label, llm_call_log)
+    _save_llm_call_log(workspace, agent_label, call_log)
 
     return _WorkerResult(
         tag=worker_tag,
@@ -390,7 +400,7 @@ async def _run_design_worker(
         messages_log=messages_log,
         turn_count=final_state["turn_count"],
         cost=cost,
-        llm_call_log=llm_call_log,
+        llm_call_log=call_log,
     )
 
 
