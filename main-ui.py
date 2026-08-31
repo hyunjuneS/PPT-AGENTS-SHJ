@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 
 from agents.llms import AsyncLLM
 from deeppresenter.utils.config import LLM
-from deeppresenter.utils.constants import WORKSPACE_BASE
+from deeppresenter.utils.constants import CONTEXT_LENGTH_LIMIT, WORKSPACE_BASE
 from deeppresenter.utils.log import SessionIdFilter, set_session_id
 
 # .env 파일을 os.environ 에 주입. reload worker 재import 시에도 동일하게 적용된다.
@@ -158,6 +158,7 @@ def _make_deep_config(research_llm=None, design_llm=None):
         design_agent=d,
         long_context_model=r,
         vlm_agent=_to_deep_llm(_vlm_llm) if _vlm_llm else None,
+        context_window=CONTEXT_LENGTH_LIMIT,
     )
 
 
