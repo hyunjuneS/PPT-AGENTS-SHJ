@@ -25,6 +25,18 @@ _DEFAULT_TIMEOUT = Timeout(connect=5.0, read=600, write=600, pool=600)
 
 
 def to_chat_openai(llm: LLM) -> ChatOpenAI:
+    # Default max_tokens: without an explicit cap, some gateways/backends fall back to
+    # a much smaller default output limit of their own — enough for short replies, but
+    # not enough to finish generating a whole slide's HTML inside a single write_file
+    # tool-call argument. When that default is too small, the response gets cut off
+    # mid-argument (finish_reason "length"), producing truncated/invalid JSON that
+    # write_file's tool call fails to parse — confirmed by reproducing it with a short
+    # write_file (succeeds) vs. a longer one (fails) on the same model. 16384 is well
+    # under GLM-5.3-flash's real ~128K output ceiling, so this is just raising the
+    # floor, not asking the model to generate more than it would anyway.
+    # llm.sampling_parameters is spread last so a caller-supplied max_tokens (e.g. via
+    # the API's additional_request param) still overrides this default.
+    params = {"max_tokens": 16384, **llm.sampling_parameters}
     return ChatOpenAI(
         model=llm.model,
         base_url=llm.base_url,
@@ -37,5 +49,5 @@ def to_chat_openai(llm: LLM) -> ChatOpenAI:
         # _invoke_with_retry sees, so .history/{agent}-llm-calls.json records one
         # "failed" entry per outer attempt even when the SDK silently retried a
         # few times underneath it first.
-        **llm.sampling_parameters,
+        **params,
     )
