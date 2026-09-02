@@ -81,7 +81,16 @@ async def screenshot_slide(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        except asyncio.TimeoutError:
+            # wait_for only cancels the await — the node/Chromium subprocess itself
+            # keeps running unless killed here, otherwise it lingers as a zombie
+            # eating CPU/memory across every retry, making the next attempt more
+            # likely to time out too instead of getting a clean shot at succeeding.
+            proc.kill()
+            await proc.wait()
+            raise
         stdout_text = stdout.decode(errors="replace")
 
         dims = None
