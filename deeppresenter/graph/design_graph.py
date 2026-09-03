@@ -500,10 +500,10 @@ async def run_design_graph_parallel(
     # so a bad manifest fails fast, before any worker starts, rather than confusing
     # N workers independently.
     template_manifest_raw = json.loads((slides_dir / "template_manifest.json").read_text(encoding="utf-8"))
-    # template*.html only — cover-page.html/references-page.html/end-page.html are
-    # special-purpose and must never be assignable to a content slide, even if the
-    # LLM names one of them verbatim.
-    valid_template_names = {p.name for p in Path(_HYNIX_TEMPLATE_DIR).glob("template*.html")}
+    # Every .html file in the template directory is a valid assignment — naming isn't
+    # limited to "template*.html" (e.g. cover-page.html/end-page.html-style names are
+    # also used as regular content templates in some template sets).
+    valid_template_names = {p.name for p in Path(_HYNIX_TEMPLATE_DIR).glob("*.html")}
     for page_no in range(2, page_count + 1):
         template_name = template_manifest_raw.get(str(page_no))
         if not template_name:
