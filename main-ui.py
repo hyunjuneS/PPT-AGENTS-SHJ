@@ -16,23 +16,46 @@ from fastapi.responses import FileResponse
 
 from agents.llms import AsyncLLM
 from deeppresenter.utils.config import LLM
+from deeppresenter.utils.constants import WORKSPACE_BASE
 from deeppresenter.utils.log import SessionIdFilter, set_session_id
 
 # .env 파일을 os.environ 에 주입. reload worker 재import 시에도 동일하게 적용된다.
 load_dotenv()
+
+_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s session_id=%(session_id)s: %(message)s"
 
 logging.basicConfig(
     level=logging.INFO,
     # session_id — 동시에 여러 요청이 들어와도 로그 한 줄 한 줄이 어느 요청 것인지 구분할 수
     # 있도록 모든 로그 라인에 붙인다 (SessionIdFilter가 채움). Loki에서
     # `|= "session_id=abc12345"`로 필터링하면 그 요청의 로그만 시간순으로 모아 볼 수 있다.
-    format="%(asctime)s [%(levelname)s] %(name)s session_id=%(session_id)s: %(message)s",
+    format=_LOG_FORMAT,
     # logging.StreamHandler()의 기본 스트림은 stdout이 아니라 stderr — 명시하지 않으면
     # 정상 운영 로그(logger.info)가 컨테이너의 STDERR로 나가서, 같은 stdout으로 나가는
     # deeppresenter/utils/log.py의 print() 기반 에이전트 진행 로그와 스트림이 갈라진다
     # (Loki 같은 로그 수집기에서 STDOUT/STDERR가 다른 스트림으로 분리돼 보이는 원인).
     stream=sys.stdout,
 )
+
+# 콘솔(stdout)에 찍히는 것과 같은 내용을 그대로 파일에도 남긴다 — turn/tool_call/tool_result 등
+# deeppresenter.utils.log를 거치는 모든 진행 로그가 여기 포함된다(재시작해도 이어쓰기).
+# WORKSPACE_BASE(기본: deeppresenter/output/YYYYMMDD)에 날짜별로 쌓인다.
+#
+# 중복 부착 방지: __main__ 실행 시 아래 uvicorn.run("main-ui:app", ...)이 문자열 앱 경로를
+# 쓰는데(reload=True에 필수), 이 때문에 uvicorn이 "main-ui"를 __main__과는 별개의 모듈로
+# 다시 import해서 이 파일의 top-level 코드(바로 이 블록 포함)가 같은 프로세스 안에서 두 번
+# 실행된다. logging.basicConfig()는 자체적으로 중복 방지가 되지만 addHandler는 그렇지 않아서,
+# 가드 없이는 같은 파일을 가리키는 FileHandler가 두 번 붙어 모든 로그 줄이 두 번씩 찍힌다.
+_log_file_path = str((WORKSPACE_BASE / "server.log").resolve())
+if not any(
+    isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == _log_file_path
+    for h in logging.root.handlers
+):
+    WORKSPACE_BASE.mkdir(parents=True, exist_ok=True)
+    _log_file_handler = logging.FileHandler(_log_file_path, encoding="utf-8")
+    _log_file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    logging.root.addHandler(_log_file_handler)
+
 for _handler in logging.root.handlers:
     _handler.addFilter(SessionIdFilter())
 logger = logging.getLogger(__name__)
@@ -78,10 +101,19 @@ def _tier_base_url(model_size: str) -> str:
     )
 
 
+def _vlm_base_url() -> str:
+    return (
+        os.environ.get("VLM_MODEL_URL")
+        or os.environ.get("OPENAI_BASE_URL")
+        or _DEFAULT_BASE_URL
+    )
+
+
 # Research/Design 단계에 별도 instruction을 받지 않는 엔드포인트에서 사용하는 고정 지시문.
 _RESEARCH_DEFAULT_INSTRUCTION = "Create presentation content based on the attached document."
 _DESIGN_DEFAULT_INSTRUCTION = "Create a professional presentation."
 
+# research/design 에이전트 공통 기본 모델 — MODEL_BIG/MIDDLE/SMALL 티어만 쓰며 VLM과는 무관.
 _llm = AsyncLLM(
     model=os.environ.get("MODEL_BIG", "claude-opus-4-5"),
     base_url=_tier_base_url("big"),
@@ -89,36 +121,43 @@ _llm = AsyncLLM(
     timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
 )
 
-# Design 에이전트 전용 모델 (VLM) — DESIGN_MODEL_NAME이 없으면 기본 모델 사용.
-# API 키는 VLM_API_KEY가 있으면 사용하고, 없으면 OPENAI_API_KEY로 폴백한다.
-_design_llm = AsyncLLM(
-    model=os.environ.get("DESIGN_MODEL_NAME") or os.environ.get("MODEL_BIG", "claude-opus-4-5"),
-    base_url=_tier_base_url("big"),
-    api_key=os.environ.get("VLM_API_KEY") or os.environ.get("OPENAI_API_KEY", ""),
-    timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
+# Heavy-reflect 전용 VLM 모델 — inspect_slide가 이 모델에만 별도로 이미지를 보내 겹침 여부를
+# 검토받는다(Design 에이전트 본체는 이 모델을 쓰지 않고, 텍스트 리뷰 결과만 전달받음).
+# VLM_MODEL_NAME 미설정 시 None — HEAVY_REFLECT=1인데 이게 없으면 기동 시점에 에러로 막는다.
+_vlm_llm = (
+    AsyncLLM(
+        model=os.environ["VLM_MODEL_NAME"],
+        base_url=_vlm_base_url(),
+        api_key=os.environ.get("VLM_API_KEY") or os.environ.get("OPENAI_API_KEY", ""),
+        timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
+    )
+    if os.environ.get("VLM_MODEL_NAME")
+    else None
 )
 
 # PPT_LANGUAGE env — 출력 언어 고정. 값: "en" (기본) 또는 "ko".
 _LANGUAGE: str = os.environ.get("PPT_LANGUAGE", "en")
 
-logger.info("LLM configured: research=%s  design=%s  language=%s",
-            _llm, _design_llm, _LANGUAGE)
+logger.info("LLM configured: research=design=%s  vlm=%s  language=%s",
+            _llm, _vlm_llm, _LANGUAGE)
 
 
 def _make_deep_config(research_llm=None, design_llm=None):
     """DeepPresenterConfig을 생성. research_llm/design_llm을 넘기면 해당 티어로
-    선택된 LLM을 쓰고, 안 넘기면 기존처럼 정적 글로벌(_llm/_design_llm)에서 만든다."""
+    선택된 LLM을 쓰고, 안 넘기면 정적 글로벌(_llm)에서 만든다. vlm_agent는 항상 전역
+    _vlm_llm(VLM_MODEL_NAME 기반, 티어 개념 없음)에서 만든다."""
     from deeppresenter.utils.config import DeepPresenterConfig, LLM
 
     def _to_deep_llm(llm: AsyncLLM) -> LLM:
         return LLM(model=llm.model, base_url=llm.base_url, api_key=llm.api_key)
 
     r = research_llm or _to_deep_llm(_llm)
-    d = design_llm or _to_deep_llm(_design_llm)
+    d = design_llm or _to_deep_llm(_llm)
     return DeepPresenterConfig(
         research_agent=r,
         design_agent=d,
         long_context_model=r,
+        vlm_agent=_to_deep_llm(_vlm_llm) if _vlm_llm else None,
     )
 
 
@@ -133,8 +172,7 @@ _MODEL_TIER_ENV = {"big": "MODEL_BIG", "middle": "MODEL_MIDDLE", "small": "MODEL
 def _build_tier_llm(model_size: str) -> LLM | None:
     model_name = os.environ.get(_MODEL_TIER_ENV[model_size])
     if not model_name and model_size == "big":
-        # MODEL_BIG 미설정 시 DESIGN_MODEL_NAME → 기본값으로 폴백
-        model_name = os.environ.get("DESIGN_MODEL_NAME") or "claude-opus-4-5"
+        model_name = "claude-opus-4-5"
     if not model_name:
         return None
 
@@ -153,6 +191,19 @@ logger.info(
     _TIER_LLMS["middle"].model if _TIER_LLMS["middle"] else None, _TIER_LLMS["middle"].base_url if _TIER_LLMS["middle"] else None,
     _TIER_LLMS["small"].model if _TIER_LLMS["small"] else None, _TIER_LLMS["small"].base_url if _TIER_LLMS["small"] else None,
 )
+
+
+def _title_info_block(file_title: str | None) -> str:
+    """Design 에이전트 instruction에 덧붙여 첫 페이지(커버) 제목 자리를 채우는 지시문.
+    file_title이 주어지면 그 값을 그대로 쓰라고 지시하고, 없으면 아무 지시도 추가하지 않아
+    에이전트가 매뉴스크립트 내용을 보고 스스로 제목을 정하던 기존 동작을 그대로 둔다."""
+    if not file_title:
+        return ""
+    return (
+        "Cover slide (slide_01) title: use exactly this text as the presentation's main title — "
+        "do not invent, translate, shorten, or otherwise modify it:\n"
+        f"{file_title}"
+    )
 
 
 def _cover_info_block(presenter_name: str, emp_no: str, team_name: str) -> str:
@@ -270,7 +321,7 @@ def _resolve_tiered_llm(
     return base.model_copy(update=updates)
 
 
-async def _design_response(result, session_id: str, export_filename: str, emp_no: str):
+async def _design_response(result, session_id: str, artifact_id: str, emp_no: str):
     """Shared response-building for the Design endpoints.
 
     Converts the generated slides to PPTX in the same request (same replica)
@@ -280,13 +331,21 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
     fail with "slides_dir not found" even though the files genuinely exist,
     just on another replica's local disk.
 
-    Uploads three artifacts to MinIO, all under "{emp_no}/{export_filename stem}/":
-    - the PPTX at ".../ppt/{export_filename stem}.pptx"
+    Uploads four artifacts to MinIO, all under "{emp_no}/slide/{artifact_id}/":
+    - the PPTX at ".../ppt/{artifact_id}.pptx"
+    - one rendered PNG screenshot per slide_*.html at ".../pngs/..." — same Playwright rendering
+      inspect_slide's VLM review uses (chart placeholders visualized, Korean font fallback applied),
+      just as PNG instead of the JPEG inspect_slide sends to the VLM.
     - every slide_*.html + global.css + any local image (e.g. the hynix cover logo) individually
       at ".../htmls/..."
     - the scrollable combined HTML + global.css + those same local images at ".../combined_html/...".
       Each slide inside combined.html still references global.css via its own <link>, so global.css
       must ship alongside it too, or every slide renders unstyled.
+
+    The returned PPTX's filename is also derived from artifact_id ("{artifact_id}.pptx"). If that
+    artifact_id already has a PPTX at that path in MinIO, a '_(1)', '_(2)', ... suffix is appended
+    until a free one is found (resolved once, then reused for all four uploads + the filename below
+    — so ppt/pngs/htmls/combined_html always end up under the same final artifact_id folder).
 
     Before any of that, injects a small JS/SVG chart-rendering script into any slide_*.html that
     has a data-chart-type element, so the chart is actually visible when viewing the html/combined
@@ -294,13 +353,23 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
     div itself was otherwise empty in plain HTML).
     """
     from deeppresenter.tools.export import combine_html_slides, html_slides_to_pptx, inject_chart_rendering
-    from deeppresenter.tools.storage import upload_combined_html, upload_html_files, upload_pptx
+    from deeppresenter.tools.storage import (
+        resolve_unique_artifact_id,
+        upload_combined_html_by_artifact,
+        upload_html_files_by_artifact,
+        upload_pngs_by_artifact,
+        upload_pptx_by_artifact,
+    )
+    from deeppresenter.tools.task import screenshot_slide
+
+    artifact_id = resolve_unique_artifact_id(emp_no, artifact_id)
 
     slides_dir = result.slides_dir
     inject_chart_rendering(slides_dir)
     html_files = sorted(Path(slides_dir).glob("slide_*.html"))
 
-    pptx_path = Path(slides_dir) / export_filename
+    pptx_filename = f"{artifact_id}.pptx"
+    pptx_path = Path(slides_dir) / pptx_filename
     try:
         await html_slides_to_pptx(
             slides_dir=slides_dir,
@@ -313,10 +382,28 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
         raise HTTPException(status_code=500, detail=f"Export failed: {e}")
 
     try:
-        object_name = upload_pptx(str(pptx_path), emp_no, export_filename)
+        object_name = upload_pptx_by_artifact(str(pptx_path), emp_no, artifact_id)
     except Exception as e:
         logger.error("[Design] MinIO upload failed: %s", e)
         raise HTTPException(status_code=500, detail=f"MinIO upload failed: {e}")
+
+    png_dir = Path(slides_dir) / "pngs"
+    png_dir.mkdir(exist_ok=True)
+    png_files = []
+    for html_file in html_files:
+        img_bytes, _ = await screenshot_slide(str(html_file), aspect_ratio="16:9", image_format="png")
+        if img_bytes is None:
+            logger.warning("[Design] screenshot failed for %s, skipping its PNG", html_file)
+            continue
+        png_path = png_dir / f"{html_file.stem}.png"
+        png_path.write_bytes(img_bytes)
+        png_files.append(str(png_path))
+
+    try:
+        png_object_names = upload_pngs_by_artifact(png_files, emp_no, artifact_id)
+    except Exception as e:
+        logger.error("[Design] MinIO pngs upload failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"MinIO pngs upload failed: {e}")
 
     css_path = Path(slides_dir) / "global.css"
     image_extensions = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")
@@ -327,7 +414,7 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
     if css_path.exists():
         html_bundle_files.append(str(css_path))
     try:
-        htmls_object_names = upload_html_files(html_bundle_files, emp_no, export_filename)
+        htmls_object_names = upload_html_files_by_artifact(html_bundle_files, emp_no, artifact_id)
     except Exception as e:
         logger.error("[Design] MinIO htmls upload failed: %s", e)
         raise HTTPException(status_code=500, detail=f"MinIO htmls upload failed: {e}")
@@ -338,7 +425,7 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
         combined_bundle_files = [str(combined_path)] + [str(p) for p in image_files]
         if css_path.exists():
             combined_bundle_files.append(str(css_path))
-        combined_object_names = upload_combined_html(combined_bundle_files, emp_no, export_filename)
+        combined_object_names = upload_combined_html_by_artifact(combined_bundle_files, emp_no, artifact_id)
     except Exception as e:
         logger.error("[Design] MinIO combined html upload failed: %s", e)
         raise HTTPException(status_code=500, detail=f"MinIO combined html upload failed: {e}")
@@ -346,13 +433,14 @@ async def _design_response(result, session_id: str, export_filename: str, emp_no
     return FileResponse(
         path=str(pptx_path),
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        filename=export_filename,
+        filename=pptx_filename,
         headers={
             "X-Session-Id": session_id,
             "X-Slides-Dir": slides_dir,
             "X-Slide-Count": str(len(html_files)),
             "X-Turns": str(len(result.messages_log)),
             "X-Minio-Object": object_name,
+            "X-Minio-Pngs-Count": str(len(png_object_names)),
             "X-Minio-Htmls-Count": str(len(htmls_object_names)),
             "X-Minio-Combined-Html-Count": str(len(combined_object_names)),
         },
@@ -431,9 +519,18 @@ async def _run_research_stage(config, workspace, session_id: str, file: UploadFi
 
 
 async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_file: str, instruction: str):
-    """원고(.md) → Design 에이전트(Hynix 템플릿)로 HTML 슬라이드 생성."""
+    """원고(.md) → Design 에이전트(Hynix 템플릿)로 HTML 슬라이드 생성.
+
+    DESIGN_PARALLEL_MODE가 켜져 있으면 run_design_graph_parallel(슬라이드를 워커별로 나눠
+    asyncio.Semaphore로 동시 실행)을 대신 쓴다 — 단, DESIGN_CONFIG_FILE이 기본 design-hynix.yaml이
+    아닌 다른(커스텀) yaml을 가리킬 때나 DESIGN_TEMPLATE_FILE이 설정된 경우는, 병렬 워커 4개 yaml이
+    design-hynix.yaml 구조를 그대로 손으로 옮겨 만든 것이라 그 가정이 안 맞을 수 있어 항상 기존
+    직렬 경로(run_design_graph)로 폴백한다. DESIGN_CONFIG_FILE이 design-hynix.yaml 자체를 가리키는
+    (일반적인) 경우는 병렬 모드 대상이다. template-free 경로(_run_design_free_stage)는 이 분기와
+    무관하게 항상 직렬로만 동작한다."""
     from deeppresenter.graph.callbacks import get_langfuse_handler
-    from deeppresenter.graph.design_graph import run_design_graph
+    from deeppresenter.graph.design_graph import run_design_graph, run_design_graph_parallel
+    from deeppresenter.utils.constants import DESIGN_PARALLEL_MODE, PACKAGE_DIR
     from deeppresenter.utils.typings import InputRequest
 
     req = InputRequest(instruction=instruction, language=_LANGUAGE)
@@ -444,13 +541,26 @@ async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_f
         template_content = Path(tmpl_path).read_text(encoding="utf-8")
 
     config_file = os.environ.get("DESIGN_CONFIG_FILE") or None
+    default_hynix_config_file = PACKAGE_DIR / "roles" / "design-hynix.yaml"
+    is_default_hynix_config = bool(config_file) and Path(config_file).resolve() == default_hynix_config_file.resolve()
+    use_parallel = DESIGN_PARALLEL_MODE and is_default_hynix_config and not template_content
 
-    logger.info("[DesignHynixTemplate] session=%s lang=%s file=%s config=%s template=%s",
+    logger.info("[DesignHynixTemplate] session=%s lang=%s file=%s config=%s template=%s parallel=%s",
                 session_id, _LANGUAGE, Path(markdown_file).name,
-                Path(config_file).name if config_file else "Design.yaml",
-                bool(template_content))
+                Path(config_file).name if config_file else "(unset)",
+                bool(template_content), use_parallel)
 
     try:
+        if use_parallel:
+            return await run_design_graph_parallel(
+                config=config,
+                workspace=workspace,
+                req=req,
+                markdown_file=markdown_file,
+                language=_LANGUAGE,
+                langfuse_handler=get_langfuse_handler(session_id),
+                session_id=session_id,
+            )
         return await run_design_graph(
             config=config,
             workspace=workspace,
@@ -514,15 +624,15 @@ def app_ready():
 @app.post("/download", tags=["dev"])
 async def download_pptx(
     emp_no: str = Form(...),
-    export_filename: str = Form(..., description="MinIO에 저장된 파일명 (예: slides.pptx 또는 slides)"),
+    artifact_id: str = Form(..., description="MinIO에 저장된 산출물 식별자 (생성 시 넘긴 artifact_id)"),
 ):
-    """MinIO의 '{emp_no}/{export_filename stem}/ppt/{export_filename stem}.pptx' 오브젝트를 조회해 다운로드."""
+    """MinIO의 '{emp_no}/slide/{artifact_id}/ppt/{artifact_id}.pptx' 오브젝트를 조회해 다운로드."""
     from starlette.background import BackgroundTask
 
-    from deeppresenter.tools.storage import download_pptx as fetch_pptx
+    from deeppresenter.tools.storage import download_pptx_by_artifact as fetch_pptx
 
     try:
-        local_path, object_name = fetch_pptx(emp_no, export_filename)
+        local_path, object_name = fetch_pptx(emp_no, artifact_id)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -541,23 +651,23 @@ async def download_pptx(
 @app.post("/download-separated-html", tags=["dev"])
 async def download_separated_html(
     emp_no: str = Form(...),
-    export_filename: str = Form(..., description="MinIO에 저장된 파일명 (예: slides.pptx 또는 slides)"),
+    artifact_id: str = Form(..., description="MinIO에 저장된 산출물 식별자 (생성 시 넘긴 artifact_id)"),
 ):
-    """MinIO의 '{emp_no}/{export_filename stem}/htmls/' 아래 개별 슬라이드 html + css 파일을
+    """MinIO의 '{emp_no}/slide/{artifact_id}/htmls/' 아래 개별 슬라이드 html + css 파일을
     모두 모아 zip으로 묶어 다운로드."""
     from starlette.background import BackgroundTask
 
-    from deeppresenter.tools.storage import download_html_files
+    from deeppresenter.tools.storage import download_html_files_by_artifact
 
     try:
-        local_path, prefix = download_html_files(emp_no, export_filename)
+        local_path, prefix = download_html_files_by_artifact(emp_no, artifact_id)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error("[DownloadSeparatedHtml] MinIO download failed: %s", e)
         raise HTTPException(status_code=500, detail=f"MinIO download failed: {e}")
 
-    zip_filename = f"{Path(prefix.rstrip('/')).name}.zip"
+    zip_filename = f"{artifact_id}.zip"
     return FileResponse(
         path=local_path,
         media_type="application/zip",
@@ -570,24 +680,53 @@ async def download_separated_html(
 @app.post("/download-combined-html", tags=["dev"])
 async def download_combined_html(
     emp_no: str = Form(...),
-    export_filename: str = Form(..., description="MinIO에 저장된 파일명 (예: slides.pptx 또는 slides)"),
+    artifact_id: str = Form(..., description="MinIO에 저장된 산출물 식별자 (생성 시 넘긴 artifact_id)"),
 ):
-    """MinIO의 '{emp_no}/{export_filename stem}/combined_html/' 아래 combined.html + 그 로컬 이미지
+    """MinIO의 '{emp_no}/slide/{artifact_id}/combined_html/' 아래 combined.html + 그 로컬 이미지
     (예: 하이닉스 커버 로고)를 모두 모아 zip으로 묶어 다운로드 — combined.html이 이미지를 상대경로로
     참조하므로 이미지 없이 combined.html만 받으면 렌더링이 깨진다."""
     from starlette.background import BackgroundTask
 
-    from deeppresenter.tools.storage import download_combined_html as fetch_combined_html
+    from deeppresenter.tools.storage import download_combined_html_by_artifact as fetch_combined_html
 
     try:
-        local_path, prefix = fetch_combined_html(emp_no, export_filename)
+        local_path, prefix = fetch_combined_html(emp_no, artifact_id)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error("[DownloadCombinedHtml] MinIO download failed: %s", e)
         raise HTTPException(status_code=500, detail=f"MinIO download failed: {e}")
 
-    zip_filename = f"{Path(prefix.rstrip('/')).name}.zip"
+    zip_filename = f"{artifact_id}.zip"
+    return FileResponse(
+        path=local_path,
+        media_type="application/zip",
+        filename=zip_filename,
+        headers={"X-Minio-Prefix": prefix},
+        background=BackgroundTask(lambda: Path(local_path).unlink(missing_ok=True)),
+    )
+
+
+@app.post("/download-pngs", tags=["dev"])
+async def download_pngs(
+    emp_no: str = Form(...),
+    artifact_id: str = Form(..., description="MinIO에 저장된 산출물 식별자 (생성 시 넘긴 artifact_id)"),
+):
+    """MinIO의 '{emp_no}/slide/{artifact_id}/pngs/' 아래 슬라이드별 렌더링 PNG 스크린샷을
+    모두 모아 zip으로 묶어 다운로드."""
+    from starlette.background import BackgroundTask
+
+    from deeppresenter.tools.storage import download_pngs_by_artifact
+
+    try:
+        local_path, prefix = download_pngs_by_artifact(emp_no, artifact_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("[DownloadPngs] MinIO download failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"MinIO download failed: {e}")
+
+    zip_filename = f"{artifact_id}.zip"
     return FileResponse(
         path=local_path,
         media_type="application/zip",
@@ -602,10 +741,11 @@ async def template_based_ppt_generation(
     file: UploadFile = File(...),
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
-    export_filename: str = Form(default="slides.pptx"),
-    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    artifact_id: str = Form(..., description="산출물 식별자. 생성되는 PPTX 파일명('{artifact_id}.pptx')과 MinIO 저장 경로('{emp_no}/slide/{artifact_id}/ppt|htmls|combined_html/...')에 사용됨."),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{artifact_id}/...'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
+    file_title: str | None = Form(default=None, description="첫 슬라이드(커버) 제목으로 쓸 텍스트. 미입력 시 LLM이 매뉴스크립트 내용을 보고 스스로 제목을 정함. artifact_id(저장 파일명)와는 무관"),
     reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
@@ -631,11 +771,13 @@ async def template_based_ppt_generation(
         f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
         f"\n\n{_reference_info_block(reference_file_name)}"
     )
+    if file_title:
+        design_instruction += f"\n\n{_title_info_block(file_title)}"
     design_result = await _run_design_hynix_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
     )
 
-    return await _design_response(design_result, session_id, export_filename, emp_no)
+    return await _design_response(design_result, session_id, artifact_id, emp_no)
 
 
 @app.post("/template-free-ppt-generation", tags=["main"], summary="Template-Free-PPT-Generation")
@@ -643,10 +785,11 @@ async def template_free_ppt_generation(
     file: UploadFile = File(...),
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
-    export_filename: str = Form(default="slides.pptx"),
-    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    artifact_id: str = Form(..., description="산출물 식별자. 생성되는 PPTX 파일명('{artifact_id}.pptx')과 MinIO 저장 경로('{emp_no}/slide/{artifact_id}/ppt|htmls|combined_html/...')에 사용됨."),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{artifact_id}/...'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
+    file_title: str | None = Form(default=None, description="첫 슬라이드(커버) 제목으로 쓸 텍스트. 미입력 시 LLM이 매뉴스크립트 내용을 보고 스스로 제목을 정함. artifact_id(저장 파일명)와는 무관"),
     reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
@@ -672,11 +815,13 @@ async def template_free_ppt_generation(
         f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
         f"\n\n{_reference_info_block(reference_file_name)}"
     )
+    if file_title:
+        design_instruction += f"\n\n{_title_info_block(file_title)}"
     design_result = await _run_design_free_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
     )
 
-    return await _design_response(design_result, session_id, export_filename, emp_no)
+    return await _design_response(design_result, session_id, artifact_id, emp_no)
 
 
 @app.post("/template-based-ppt-generation-db", tags=["main"], summary="Template-Based-PPT-Generation-DB")
@@ -684,10 +829,11 @@ async def template_based_ppt_generation_db(
     ids: list[str] = Form(..., description="sources 테이블에서 raw_text를 조회할 id 목록 (여러 개 전달 가능)"),
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
-    export_filename: str = Form(default="slides.pptx"),
-    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    artifact_id: str = Form(..., description="산출물 식별자. 생성되는 PPTX 파일명('{artifact_id}.pptx')과 MinIO 저장 경로('{emp_no}/slide/{artifact_id}/ppt|htmls|combined_html/...')에 사용됨."),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{artifact_id}/...'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
+    file_title: str | None = Form(default=None, description="첫 슬라이드(커버) 제목으로 쓸 텍스트. 미입력 시 LLM이 매뉴스크립트 내용을 보고 스스로 제목을 정함. artifact_id(저장 파일명)와는 무관"),
     reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
@@ -749,11 +895,13 @@ async def template_based_ppt_generation_db(
         f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
         f"\n\n{_reference_info_block(reference_file_name)}"
     )
+    if file_title:
+        design_instruction += f"\n\n{_title_info_block(file_title)}"
     design_result = await _run_design_hynix_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
     )
 
-    return await _design_response(design_result, session_id, export_filename, emp_no)
+    return await _design_response(design_result, session_id, artifact_id, emp_no)
 
 
 @app.post("/template-free-ppt-generation-db", tags=["main"], summary="Template-Free-PPT-Generation-DB")
@@ -761,10 +909,11 @@ async def template_free_ppt_generation_db(
     ids: list[str] = Form(..., description="sources 테이블에서 raw_text를 조회할 id 목록 (여러 개 전달 가능)"),
     num_pages: int = Form(default=10, description="총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"),
     auto_page: bool = Form(default=True, description="기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"),
-    export_filename: str = Form(default="slides.pptx"),
-    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/{export_filename}/ppt/{export_filename}.pptx'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
+    artifact_id: str = Form(..., description="산출물 식별자. 생성되는 PPTX 파일명('{artifact_id}.pptx')과 MinIO 저장 경로('{emp_no}/slide/{artifact_id}/ppt|htmls|combined_html/...')에 사용됨."),
+    emp_no: str = Form(..., description="MinIO 저장 경로 '{emp_no}/slide/{artifact_id}/...'에 사용되는 사번. 커버 슬라이드에도 표시됨"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
+    file_title: str | None = Form(default=None, description="첫 슬라이드(커버) 제목으로 쓸 텍스트. 미입력 시 LLM이 매뉴스크립트 내용을 보고 스스로 제목을 정함. artifact_id(저장 파일명)와는 무관"),
     reference_file_name: list[str] = Form(..., description="References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"),
     research_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Research 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
     design_model_size: Literal["big", "middle", "small"] = Form(default="big", description="Design 단계에 사용할 모델 티어 (.env의 MODEL_BIG/MODEL_MIDDLE/MODEL_SMALL)"),
@@ -826,11 +975,13 @@ async def template_free_ppt_generation_db(
         f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
         f"\n\n{_reference_info_block(reference_file_name)}"
     )
+    if file_title:
+        design_instruction += f"\n\n{_title_info_block(file_title)}"
     design_result = await _run_design_free_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
     )
 
-    return await _design_response(design_result, session_id, export_filename, emp_no)
+    return await _design_response(design_result, session_id, artifact_id, emp_no)
 
 
 # ---------------------------------------------------------------------------
@@ -845,9 +996,9 @@ if __name__ == "__main__":
         print("error: OPENAI_API_KEY is required (set in .env or environment)", file=sys.stderr)
         sys.exit(1)
 
-    heavy_reflect = os.environ.get("DEEPPRESENTER_HEAVY_REFLECT", "").lower() in ("1", "true", "yes")
-    if heavy_reflect and not os.environ.get("DESIGN_MODEL_NAME"):
-        print("error: DESIGN_MODEL_NAME is required when DEEPPRESENTER_HEAVY_REFLECT is set", file=sys.stderr)
+    heavy_reflect = os.environ.get("HEAVY_REFLECT", "").lower() in ("1", "true", "yes")
+    if heavy_reflect and not os.environ.get("VLM_MODEL_NAME"):
+        print("error: VLM_MODEL_NAME is required when HEAVY_REFLECT is set", file=sys.stderr)
         sys.exit(1)
 
     # 경로 검증
@@ -862,10 +1013,11 @@ if __name__ == "__main__":
     reload    = os.environ.get("RELOAD", "true").lower() not in ("0", "false", "no")
     log_level = os.environ.get("LOG_LEVEL", "info")
 
-    logger.info("LLM  : model=%s  vlm=%s  url=%s",
+    logger.info("LLM  : model=%s  vlm=%s  url=%s  vlm_url=%s",
                 os.environ.get("MODEL_BIG", "claude-opus-4-5"),
-                os.environ.get("DESIGN_MODEL_NAME", "(none)"),
-                os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL)
+                os.environ.get("VLM_MODEL_NAME", "(none)"),
+                os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL,
+                _vlm_base_url() if os.environ.get("VLM_MODEL_NAME") else "(none)")
     logger.info("Server: host=%s port=%d reload=%s log_level=%s", host, port, reload, log_level)
 
     uvicorn.run(

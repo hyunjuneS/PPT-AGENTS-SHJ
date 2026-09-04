@@ -114,6 +114,48 @@ def _save_history(
         )
 
 
+def _sum_call_tokens(calls: list[dict]) -> dict:
+    """Sums each call's input/output/total tokens (engine.py's agent_node stamps these
+    from the response's usage_metadata) into the same {prompt, completion, total} shape
+    -config.json's "cost" has always used — single source for both files instead of
+    two independent walks that happen to compute the same thing."""
+    return {
+        "prompt": sum(c.get("input_tokens") or 0 for c in calls),
+        "completion": sum(c.get("output_tokens") or 0 for c in calls),
+        "total": sum(c.get("total_tokens") or 0 for c in calls),
+    }
+
+
+def _save_llm_call_log(workspace: Path, agent_name: str, calls: list[dict]) -> None:
+    """Writes .history/{agent}-llm-calls.json: one entry per LLM call this run made
+    (engine.py's agent_node), each with its turn number, input/output/total token counts,
+    exact input messages, output message, and how long that single request took — plus the
+    summed total elapsed time and token counts across every call, so both are visible
+    without adding them up by hand."""
+    hist_dir = workspace / ".history"
+    hist_dir.mkdir(parents=True, exist_ok=True)
+
+    total_elapsed = sum(c["elapsed_seconds"] for c in calls)
+    token_totals = _sum_call_tokens(calls)
+    total_cached_input_tokens = sum(c.get("cached_input_tokens") or 0 for c in calls)
+    with open(hist_dir / f"{agent_name}-llm-calls.json", "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "agent": agent_name,
+                "call_count": len(calls),
+                "total_elapsed_seconds": round(total_elapsed, 3),
+                "total_input_tokens": token_totals["prompt"],
+                "total_output_tokens": token_totals["completion"],
+                "total_tokens": token_totals["total"],
+                "total_cached_input_tokens": total_cached_input_tokens,
+                "calls": calls,
+            },
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
+
+
 async def run_research_graph(
     config: DeepPresenterConfig,
     workspace: Path,
@@ -130,6 +172,13 @@ async def run_research_graph(
     llm = config[role_config.use_model]
     chat_model = to_chat_openai(llm)
 
+    expected_pages: int | None = None
+    if req.num_pages:
+        try:
+            expected_pages = int(req.num_pages)
+        except ValueError:
+            pass
+
     async with AgentEnv(workspace) as env:
         tools = build_tools_for_role(
             role_config,
@@ -137,6 +186,7 @@ async def run_research_graph(
             env._server_tools,
             finalize_overrides={"agent_name": "Research"},
             llm=llm,
+            expected_pages=expected_pages,
         )
         tool_names = [t.name for t in tools]
 
@@ -149,7 +199,7 @@ async def run_research_graph(
         )
 
         show_agent_start("Research", None)
-        graph = build_graph(chat_model, tools, context_window=config.context_window)
+        graph, call_log = build_graph(chat_model, tools, context_window=config.context_window)
 
         initial_state = {
             "messages": [
@@ -163,6 +213,7 @@ async def run_research_graph(
             "context_warning": -1 if config.context_folding else 0,
             "agent_name": "Research",
             "final_outcome": None,
+            "llm_call_log": [],
         }
 
         run_config: dict = {"recursion_limit": _RECURSION_LIMIT}
@@ -171,30 +222,33 @@ async def run_research_graph(
             if session_id:
                 run_config["metadata"] = {"langfuse_session_id": session_id}
 
-        final_state = await graph.ainvoke(initial_state, config=run_config)
+        try:
+            final_state = await graph.ainvoke(initial_state, config=run_config)
+        except Exception:
+            # call_log already holds every attempt made so far (including failed/
+            # retried ones — see engine.py's build_graph), so it's saved here even
+            # though a run that never returns final_state would otherwise leave no
+            # .history trace at all.
+            _save_llm_call_log(workspace, "Research", call_log)
+            raise
 
     manuscript_path = final_state.get("final_outcome")
     if not manuscript_path:
         raise RuntimeError("Research agent did not call finalize with a confirmed outcome.")
 
     messages_log: list[dict] = []
-    prompt_tokens = completion_tokens = total_tokens = 0
     for m in final_state["messages"]:
         if isinstance(m, AIMessage):
             messages_log.append({"role": "assistant", "text": _message_preview(m.content)})
-            usage = getattr(m, "usage_metadata", None)
-            if usage:
-                prompt_tokens += usage.get("input_tokens", 0) or 0
-                completion_tokens += usage.get("output_tokens", 0) or 0
-                total_tokens += usage.get("total_tokens", 0) or 0
         elif isinstance(m, ToolMessage):
             messages_log.append({"role": "tool", "text": _message_preview(m.content)})
 
-    cost = {"prompt": prompt_tokens, "completion": completion_tokens, "total": total_tokens}
+    cost = _sum_call_tokens(call_log)
 
     _save_history(
-        workspace, "Research", final_state["messages"], llm.model_name, total_tokens, cost, tool_names
+        workspace, "Research", final_state["messages"], llm.model_name, cost["total"], cost, tool_names
     )
+    _save_llm_call_log(workspace, "Research", call_log)
 
     return ResearchGraphResult(
         manuscript_path=manuscript_path,

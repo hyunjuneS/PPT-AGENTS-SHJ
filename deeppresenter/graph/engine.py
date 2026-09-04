@@ -72,7 +72,21 @@ def _prepend_notice(message: BaseMessage, notice_block: dict) -> BaseMessage:
     return message.model_copy(update={"content": new_content})
 
 
-async def _invoke_with_retry(model_with_tools, messages, model_name: str, retry_times: int = RETRY_TIMES):
+def _dump_message(m: BaseMessage) -> dict:
+    """Same shape as design_graph.py/research_graph.py's _save_history dump — full, untruncated
+    content (not the redacted/truncated debug-log preview) so llm_call_log's input/output are a
+    faithful record of exactly what was sent to and received from the model."""
+    return {
+        "type": m.__class__.__name__,
+        "content": m.content,
+        "tool_calls": getattr(m, "tool_calls", None),
+        "tool_call_id": getattr(m, "tool_call_id", None),
+    }
+
+
+async def _invoke_with_retry(
+    model_with_tools, messages, model_name: str, retry_times: int = RETRY_TIMES, on_attempt_failure=None
+):
     """Port of the old engine's LLM.run() retry loop
     (deeppresenter/utils/config.py:85-113): retry on any exception, AND on a
     genuinely empty response (no content, no tool_calls) — the same failure
@@ -81,16 +95,27 @@ async def _invoke_with_retry(model_with_tools, messages, model_name: str, retry_
     at 30s) and per-attempt warning log the old engine had. Without this, an
     empty response would silently become a no-op turn that loops straight
     back to another LLM call with zero delay and no logging, instead of
-    retrying with backoff and then failing loudly."""
+    retrying with backoff and then failing loudly.
+
+    on_attempt_failure(attempt, elapsed, error_str), if given, fires synchronously
+    right after each failed attempt (before the backoff sleep) — this is how
+    agent_node records a failed attempt into the call log even when every retry
+    here is eventually exhausted and this function raises: the callback already
+    ran before that happens, so the record isn't lost along with the exception.
+    """
     errors: list[str] = []
     for attempt in range(retry_times):
+        attempt_start = time.time()
         try:
             response = await model_with_tools.ainvoke(messages)
             assert response.content or response.tool_calls, "Empty response from model"
             return response
         except Exception as e:
+            elapsed = time.time() - attempt_start
             errors.append(str(e))
             logging_openai_exceptions(model_name, e)
+            if on_attempt_failure:
+                on_attempt_failure(attempt, elapsed, str(e))
             if attempt < retry_times - 1:
                 await asyncio.sleep(min(2 ** attempt, 30))
     raise ValueError(f"All {retry_times} retries failed:\n" + "\n".join(errors))
@@ -118,7 +143,7 @@ def build_graph(
     chat_model,
     tools: Sequence[StructuredTool],
     context_window: int,
-) -> CompiledStateGraph:
+) -> tuple[CompiledStateGraph, list[dict]]:
     # handle_tool_errors=True: catch any exception raised inside a tool (not just
     # LangGraph's own ToolInvocationError) and turn it into ToolMessage content,
     # matching AgentEnv.tool_execute()'s blanket try/except (env.py:92-98) — the
@@ -127,6 +152,14 @@ def build_graph(
     model_with_tools = chat_model.bind_tools(list(tools))
     model_name = getattr(chat_model, "model_name", None) or getattr(chat_model, "model", "unknown")
     start_time = time.time()
+
+    # Appended to directly (side effect), not just returned via agent_node's state
+    # update — a node that raises never returns its state update for LangGraph's
+    # reducer to merge, so state["llm_call_log"] alone would lose every record from
+    # a turn that ultimately fails all its retries. This plain list survives that:
+    # callers keep their own reference to it and can save it in a `finally` block
+    # regardless of whether graph.ainvoke() returns or raises.
+    call_log: list[dict] = []
 
     async def agent_node(state: GraphState) -> dict:
         turn_count = state["turn_count"] + 1
@@ -150,7 +183,26 @@ def build_graph(
             updates.append(warned_last)
 
         show_agent_turn(agent_name, turn_count, max_turns)
-        response = await _invoke_with_retry(model_with_tools, messages, model_name)
+
+        def _record_failed_attempt(attempt: int, attempt_elapsed: float, error: str) -> None:
+            # Fires from inside _invoke_with_retry on every failed attempt, including
+            # the ones that get retried — this is the same event that prints openai's
+            # own "Retrying request to ... in Ns" line, now also saved as structured
+            # data instead of only appearing in server.log.
+            call_log.append({
+                "turn": turn_count,
+                "attempt": attempt + 1,
+                "status": "failed",
+                "elapsed_seconds": round(attempt_elapsed, 3),
+                "error": error,
+                "input": [_dump_message(m) for m in messages],
+            })
+
+        call_start = time.time()
+        response = await _invoke_with_retry(
+            model_with_tools, messages, model_name, on_attempt_failure=_record_failed_attempt
+        )
+        elapsed = time.time() - call_start
 
         for tc in response.tool_calls or []:
             show_tool_call(tc["name"], tc["args"])
@@ -160,10 +212,31 @@ def build_graph(
         if usage:
             context_length = usage.get("total_tokens", context_length)
 
+        # input_token_details.cache_read is LangChain's standardized field for "how many
+        # of this call's input tokens were served from the backend's prompt/KV cache" —
+        # populated only if the gateway/backend actually reports it (e.g. OpenAI's
+        # prompt_tokens_details.cached_tokens). None here means the backend isn't
+        # reporting cache stats at all, not that caching definitely didn't happen.
+        input_token_details = (usage or {}).get("input_token_details") or {}
+
+        call_record = {
+            "turn": turn_count,
+            "status": "success",
+            "elapsed_seconds": round(elapsed, 3),
+            "input_tokens": usage.get("input_tokens") if usage else None,
+            "output_tokens": usage.get("output_tokens") if usage else None,
+            "total_tokens": usage.get("total_tokens") if usage else None,
+            "cached_input_tokens": input_token_details.get("cache_read"),
+            "input": [_dump_message(m) for m in messages],
+            "output": _dump_message(response),
+        }
+        call_log.append(call_record)
+
         return {
             "messages": [*updates, response],
             "turn_count": turn_count,
             "context_length": context_length,
+            "llm_call_log": [call_record],
         }
 
     def route_after_agent(state: GraphState) -> str:
@@ -233,4 +306,4 @@ def build_graph(
     graph.add_edge("tools", "postprocess")
     graph.add_conditional_edges("postprocess", route_after_postprocess, {"agent": "agent", END: END})
 
-    return graph.compile()
+    return graph.compile(), call_log

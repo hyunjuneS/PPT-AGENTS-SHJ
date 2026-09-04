@@ -11,7 +11,12 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from deeppresenter.utils.constants import HEAVY_REFLECT, INSPECT_CONTENT_MAX_CALLS, TOOL_CUTOFF_LEN
+from deeppresenter.utils.constants import (
+    HEAVY_REFLECT,
+    INSPECT_CONTENT_MAX_CALLS,
+    SCREENSHOT_MAX_RETRIES,
+    TOOL_CUTOFF_LEN,
+)
 from deeppresenter.utils.log import debug, warning
 
 _SCREENSHOT_JS = Path(__file__).resolve().parents[1] / "html2pptx" / "screenshot.js"
@@ -29,15 +34,22 @@ def _get_chromium_executable() -> str | None:
     return None
 
 
-async def _screenshot_slide(
-    html_file: str, aspect_ratio: str = "16:9", _retry: bool = True
+async def screenshot_slide(
+    html_file: str, aspect_ratio: str = "16:9", image_format: str = "jpeg", _attempt: int = 1
 ) -> tuple[bytes | None, dict | None]:
     """HTML 슬라이드를 Playwright로 렌더링.
-    (JPEG bytes, body 치수 dict{width,height,scrollWidth,scrollHeight}) 반환.
-    실패 시 (None, None).
+    (이미지 bytes, body 치수 dict{width,height,scrollWidth,scrollHeight}) 반환.
+    실패 시 (None, None). image_format은 "jpeg"(기본, VLM 검토용) 또는 "png"
+    (main-ui.py의 슬라이드 PNG 갤러리 업로드용) — screenshot.js가 출력 파일 확장자로 판단한다.
+
+    inspect_slide(VLM 겹침 검토)와 main-ui.py의 PNG 스크린샷 업로드가 공유하는 렌더링 로직 —
+    두 곳 모두 여기 하나만 거쳐가므로 차트 placeholder 시각화, 한글 폰트 폴백 등 렌더링 방식이
+    항상 동일하게 유지된다.
 
     동시 요청으로 여러 Chromium이 한꺼번에 뜨는 순간의 자원 경합 때문에 launch가
-    간헐적으로 죽는 경우가 있어, 실패 시 한 번만 재시도한다.
+    간헐적으로 죽는 경우가 있어, 실패 시 최대 SCREENSHOT_MAX_RETRIES번까지 재시도한다 —
+    상한 없는 "무조건 재시도"는 자원 경합이 끝내 안 풀리는 상황(예: 아주 높은 동시성)에서
+    영원히 안 끝날 수 있어 일부러 두지 않는다.
     """
     if not _SCREENSHOT_JS.exists():
         warning("screenshot.js not found — visual inspect disabled")
@@ -49,7 +61,8 @@ async def _screenshot_slide(
     }
     w, h = SIZES.get(aspect_ratio, (1280, 720))
 
-    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+    suffix = ".png" if image_format == "png" else ".jpg"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
         output = f.name
 
     try:
@@ -68,7 +81,16 @@ async def _screenshot_slide(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        except asyncio.TimeoutError:
+            # wait_for only cancels the await — the node/Chromium subprocess itself
+            # keeps running unless killed here, otherwise it lingers as a zombie
+            # eating CPU/memory across every retry, making the next attempt more
+            # likely to time out too instead of getting a clean shot at succeeding.
+            proc.kill()
+            await proc.wait()
+            raise
         stdout_text = stdout.decode(errors="replace")
 
         dims = None
@@ -84,17 +106,18 @@ async def _screenshot_slide(
             return Path(output).read_bytes(), dims
         warning(f"screenshot.js failed: {stdout_text}")
     except Exception as e:
-        warning(f"_screenshot_slide error: {e}")
+        warning(f"screenshot_slide error: {e}")
     finally:
         try:
             os.unlink(output)
         except Exception:
             pass
 
-    if _retry:
-        debug("Retrying _screenshot_slide once after failure")
-        return await _screenshot_slide(html_file, aspect_ratio, _retry=False)
+    if _attempt < SCREENSHOT_MAX_RETRIES:
+        warning(f"Retrying screenshot_slide (attempt {_attempt + 1}/{SCREENSHOT_MAX_RETRIES}) after failure")
+        return await screenshot_slide(html_file, aspect_ratio, image_format, _attempt=_attempt + 1)
 
+    warning(f"screenshot_slide gave up after {_attempt} attempt(s)")
     return None, None
 
 
@@ -168,6 +191,16 @@ def finalize(outcome: str, agent_name: str = "") -> str:
         if not all(f.stem.startswith("slide_") for f in html_files):
             return "All HTML files should be named slide_NN.html"
 
+    elif agent_name == "DesignPlan":
+        # Phase A of parallel Design (design_graph.py's run_design_plan_phase) produces
+        # the shared global.css slide-master style AND a per-slide template_manifest.json
+        # (which template each content worker must use) — no slide_*.html yet, so it
+        # can't use the "Design" branch's html-file check above.
+        if not (path / "global.css").exists():
+            return "Outcome path should be the slides/ directory containing global.css"
+        if not (path / "template_manifest.json").exists():
+            return "Outcome path should also contain template_manifest.json (per-slide template assignments)"
+
     debug(f"Agent {agent_name} finalized outcome: {outcome}")
     return outcome
 
@@ -193,36 +226,25 @@ FINALIZE_SPEC = {
 
 # ── read_file ─────────────────────────────────────────────────────────────────
 
-def read_file(path: str, offset: int = 0, length: int = 200) -> str:
-    """
-    Read a text file. Use offset/length for large files.
-    offset: starting line number (0-based).
-    length: max lines to return.
-    """
+def read_file(path: str) -> str:
+    """Read and return the full contents of a text file — no offset/length,
+    no truncation. Source manuscripts and templates here are plain text files
+    at most a few hundred KB, trivial next to the model's context window, so
+    there is nothing to chunk: one call always returns everything."""
     p = Path(path)
     assert p.exists(), f"File not found: {path}"
-    lines = p.read_text(encoding="utf-8").splitlines()
-    total = len(lines)
-    if offset >= total:
-        return f"(EOF — file has {total} lines total, offset {offset} is past the end)"
-    chunk = lines[offset: offset + length]
-    result = "\n".join(chunk)
-    if len(result) > TOOL_CUTOFF_LEN:
-        result = result[:TOOL_CUTOFF_LEN] + f"\n... (truncated, use offset={offset+length} to continue)"
-    return result
+    return p.read_text(encoding="utf-8")
 
 
 READ_FILE_SPEC = {
     "type": "function",
     "function": {
         "name": "read_file",
-        "description": "Read contents of a local text file. Use offset and length for large files.",
+        "description": "Read and return the full contents of a local text file.",
         "parameters": {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Absolute path to the file."},
-                "offset": {"type": "integer", "description": "Starting line number (0-based). Default 0."},
-                "length": {"type": "integer", "description": "Max lines to return. Default 200."},
             },
             "required": ["path"],
         },
@@ -363,16 +385,38 @@ EXECUTE_COMMAND_SPEC = {
 
 # ── inspect_manuscript ────────────────────────────────────────────────────────
 
-def inspect_manuscript(path: str) -> str:
+_PAGE_SEPARATOR_RE = re.compile(r"^[ \t]*-{3,}[ \t]*$", re.MULTILINE)
+
+
+def split_pages(content: str) -> list[str]:
+    """Splits a manuscript into pages on lines that are a standalone `---` (or
+    longer-dash) separator. Unlike a plain `content.split("---")`, this does not
+    miscount a markdown table separator row (`|---|---|`) or any other inline use
+    of the substring, since those never occupy an entire line by themselves.
+    Shared with design_graph.py's parallel-mode slide manifest calculation, so
+    both always agree on how many pages a manuscript has."""
+    pages = [s.strip() for s in _PAGE_SEPARATOR_RE.split(content)]
+    return [pg for pg in pages if pg]
+
+
+def inspect_manuscript(path: str, expected_pages: int | None = None) -> str:
     """
     Basic validation of a markdown manuscript.
     Checks that it has at least one --- separator and is non-empty.
+    expected_pages, if bound (see build_tools_for_role), reports an explicit
+    mismatch instead of leaving the LLM to judge the page count itself.
     """
     p = Path(path)
     assert p.exists() and p.suffix == ".md", f"Not a valid .md file: {path}"
     content = p.read_text(encoding="utf-8")
     assert content.strip(), "Manuscript is empty"
-    pages = [s.strip() for s in content.split("---") if s.strip()]
+    pages = split_pages(content)
+
+    if expected_pages is not None and len(pages) != expected_pages:
+        delta = expected_pages - len(pages)
+        action = f"add {delta} page(s)" if delta > 0 else f"remove {-delta} page(s)"
+        return f"Page count MISMATCH: expected {expected_pages}, found {len(pages)} — {action}."
+
     return f"Manuscript looks good: {len(pages)} page(s), {len(content)} chars."
 
 
@@ -432,6 +476,36 @@ def _default_llm():
         base_url=os.environ.get("OPENAI_BASE_URL") or _FALLBACK_BASE_URL,
         api_key=os.environ.get("OPENAI_API_KEY", ""),
     )
+
+
+# ── inspect_slide's VLM overlap review ──────────────────────────────────────
+
+# Fallback only — used if inspect_slide is ever invoked without a `vlm_llm` bound
+# to it. The graph engine always binds config.vlm_agent (VLM_MODEL_NAME/VLM_MODEL_URL)
+# instead (see build_tools_for_role in deeppresenter/graph/tools.py).
+def _default_vlm_llm():
+    from deeppresenter.utils.config import LLM
+    return LLM(
+        model=os.environ.get("VLM_MODEL_NAME", ""),
+        base_url=os.environ.get("VLM_MODEL_URL") or os.environ.get("OPENAI_BASE_URL") or _FALLBACK_BASE_URL,
+        api_key=os.environ.get("VLM_API_KEY") or os.environ.get("OPENAI_API_KEY", ""),
+    )
+
+
+_VLM_OVERLAP_SYSTEM_PROMPT = (
+    "You are a meticulous visual QA reviewer for presentation slides. You will be shown a "
+    "rendered screenshot of one slide. Your ONLY job is to detect visual overlap between "
+    "elements — do not evaluate aesthetics, layout balance, font choices, spacing, or "
+    "overflow (overflow is already verified separately by a deterministic size check, not by "
+    "you). Overlap means any text, image, shape, or chart placeholder box (dashed border, "
+    "labeled '[CHART: <type>]') that visually overlaps another text, image, or shape."
+)
+
+_VLM_OVERLAP_USER_PROMPT = (
+    "Review the attached slide screenshot for element overlap only. "
+    "If any element overlaps another, describe exactly which elements overlap and roughly "
+    "where on the slide. If no element overlaps another, respond with exactly: No overlap detected."
+)
 
 
 def _truncate(text: str, max_chars: int) -> str:
@@ -551,14 +625,17 @@ INSPECT_CONTENT_SPEC = {
 async def inspect_slide(
     html_file: str,
     aspect_ratio: str = "16:9",
-) -> str | list:
+    vlm_llm=None,
+) -> str:
     """
     Validate an HTML slide file.
     Structural checks first (text-based), then a deterministic content-overflow
     check via a real browser render (scrollWidth/scrollHeight vs the fixed body
     size — this catches overflow even though `overflow:hidden` clips it invisibly
-    in any screenshot). If HEAVY_REFLECT is enabled, also returns the rendered
-    image for visual VLM review.
+    in any screenshot). If HEAVY_REFLECT is enabled, the rendered image is also
+    sent as a standalone request to a dedicated VLM (vlm_llm, or VLM_MODEL_NAME by
+    default) to check for element overlap — the calling agent's own model never
+    sees the image itself, only the VLM's text verdict.
     """
     path = Path(html_file)
     assert path.exists() and path.suffix == ".html", \
@@ -596,7 +673,7 @@ async def inspect_slide(
     # 구조 검사 통과 — 실제 브라우저 렌더링으로 overflow 여부를 결정적으로 확인.
     # overflow:hidden은 넘친 콘텐츠를 스크린샷에서 안 보이게 가리므로,
     # scrollWidth/scrollHeight로 직접 측정해야만 잡아낼 수 있다.
-    img_bytes, dims = await _screenshot_slide(html_file, aspect_ratio)
+    img_bytes, dims = await screenshot_slide(html_file, aspect_ratio)
 
     # HEAVY_REFLECT 모드면 이번 inspect_slide 호출마다(overflow로 반려되더라도) 렌더링
     # 결과를 저장한다 — edit_file → inspect_slide 반복 이력을 slide_02_01, slide_02_02...
@@ -627,28 +704,36 @@ async def inspect_slide(
                 "fits within the fixed body bounds, then call inspect_slide again."
             )
 
-    # overflow 없음 — heavy_reflect 모드면 방금 찍은 렌더링 이미지를 VLM 검토용으로 반환
-    if HEAVY_REFLECT:
-        if img_bytes:
-            b64 = base64.b64encode(img_bytes).decode()
-            return [
-                {
-                    "type": "text",
-                    "text": (
-                        "Slide structure is valid. "
-                        "Review the rendered image below for visual quality "
-                        "(layout balance, font readability, overflow, spacing, aesthetics), "
-                        "and explicitly check for overlap: does any element — including a chart "
-                        "placeholder box (dashed border, labeled '[CHART: <type>]') — visually "
-                        "overlap another text, image, or shape? "
-                        "If improvements are needed, rewrite the HTML and call inspect_slide again."
-                    ),
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
-                },
-            ]
+    # overflow 없음 — heavy_reflect 모드면 방금 찍은 렌더링 이미지를 별도의 VLM 요청으로 보내
+    # 겹침 여부만 검토받는다. 이 결과(텍스트)만 Design 에이전트에게 돌아가며, 이미지 자체는
+    # Design 에이전트의 대화에 절대 실리지 않는다 — VLM 요청과 Design 에이전트의 요청은 완전히
+    # 분리되어 있으므로, Design 에이전트가 어떤 모델을 쓰든(vision 지원 여부와 무관) 항상 동작한다.
+    if HEAVY_REFLECT and img_bytes:
+        llm = vlm_llm or _default_vlm_llm()
+        b64 = base64.b64encode(img_bytes).decode()
+        messages = [
+            {"role": "system", "content": _VLM_OVERLAP_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": _VLM_OVERLAP_USER_PROMPT},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                ],
+            },
+        ]
+        response = await llm.run(messages=messages)
+        review = (response.choices[0].message.content or "").strip()
+
+        if "no overlap" in review.lower():
+            return f"Slide is valid. ({len(content)} chars, aspect_ratio={aspect_ratio}) VLM overlap review: {review}"
+
+        return (
+            "Issues found (VLM overlap review):\n"
+            f"- {review}\n"
+            "Fix this only by resizing, repositioning, or reflowing the overlapping elements — "
+            "never remove, shorten, or simplify text content to resolve it (always preserve the "
+            "manuscript's content density). Then call inspect_slide again."
+        )
 
     return f"Slide is valid. ({len(content)} chars, aspect_ratio={aspect_ratio})"
 

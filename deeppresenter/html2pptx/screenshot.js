@@ -1,6 +1,7 @@
 'use strict';
 /**
- * screenshot.js - render an HTML slide to JPEG using Playwright
+ * screenshot.js - render an HTML slide to an image using Playwright.
+ * Output format is inferred from --output's extension: .png -> PNG, anything else -> JPEG (quality 85).
  * Usage: node screenshot.js --html <path> --output <path> [--width 1280] [--height 720]
  */
 const { chromium } = require('playwright');
@@ -86,7 +87,10 @@ const args = require('minimist')(process.argv.slice(2));
         }
       });
     });
-    await page.screenshot({ path: outputFile, type: 'jpeg', quality: 85, fullPage: false });
+    const isPng = path.extname(outputFile).toLowerCase() === '.png';
+    const screenshotOpts = { path: outputFile, type: isPng ? 'png' : 'jpeg', fullPage: false };
+    if (!isPng) screenshotOpts.quality = 85;
+    await page.screenshot(screenshotOpts);
     console.log(`Screenshot saved: ${outputFile}`);
     console.log(`DIMS:${JSON.stringify(dims)}`);
   } finally {

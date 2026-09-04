@@ -11,6 +11,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, create_model
 
 from deeppresenter.tools.task import ALL_TOOLS, InspectContentLimiter
+from deeppresenter.utils.constants import HEAVY_CONTENT_REVIEW
 from deeppresenter.utils.toolset import resolve_toolset
 from deeppresenter.utils.typings import RoleConfig
 
@@ -73,6 +74,8 @@ def build_tools_for_role(
     server_tools: dict[str, list[str]],
     finalize_overrides: dict[str, Any] | None = None,
     llm: Any | None = None,
+    vlm_llm: Any | None = None,
+    expected_pages: int | None = None,
 ) -> list[StructuredTool]:
     """finalize_overrides lets the caller bind e.g. agent_name="Design" onto the
     finalize tool at construction time (mirrors the old engine's post-hoc
@@ -83,12 +86,26 @@ def build_tools_for_role(
     review runs on the exact same model/base_url/api_key the calling role's own
     chat_model uses, not a separately-configured one. inspect_content also always
     gets a fresh InspectContentLimiter bound here (one per build_tools_for_role
-    call, i.e. per agent run) so it can't be called an unbounded number of times."""
+    call, i.e. per agent run) so it can't be called an unbounded number of times.
+    inspect_content itself is only included in the built toolset at all when
+    HEAVY_CONTENT_REVIEW is enabled — otherwise it's left out entirely, same as if
+    the role's own YAML excluded it, so the model never sees it as an option.
+
+    vlm_llm, if given, is bound onto inspect_slide's HEAVY_REFLECT overlap check —
+    a separate, dedicated vision model requested independently of the role's own
+    chat_model, so the agent that writes the HTML never itself needs to be
+    vision-capable.
+
+    expected_pages, if given, is bound onto inspect_manuscript the same way, so it
+    can report an explicit page-count mismatch instead of leaving the LLM to judge
+    the target count itself."""
     specs = resolve_toolset(role_config.toolset, tools_dict, server_tools)
 
     structured_tools: list[StructuredTool] = []
     for spec in specs:
         name = spec["function"]["name"]
+        if name == "inspect_content" and not HEAVY_CONTENT_REVIEW:
+            continue
         raw_func = ALL_TOOLS[name][1]
         func: Callable = raw_func
         if name == "finalize" and finalize_overrides:
@@ -98,6 +115,10 @@ def build_tools_for_role(
             if llm is not None:
                 overrides["llm"] = llm
             func = _bind_kwargs(raw_func, **overrides)
+        elif name == "inspect_slide" and vlm_llm is not None:
+            func = _bind_kwargs(raw_func, vlm_llm=vlm_llm)
+        elif name == "inspect_manuscript" and expected_pages is not None:
+            func = _bind_kwargs(raw_func, expected_pages=expected_pages)
 
         args_model = _build_args_model(spec, raw_func)
         kwargs: dict[str, Any] = dict(

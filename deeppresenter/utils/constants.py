@@ -6,12 +6,27 @@ from pathlib import Path
 PACKAGE_DIR = Path(__file__).parent.parent
 
 LOGGING_LEVEL = int(os.getenv("DEEPPRESENTER_LOG_LEVEL", logging.INFO))
-HEAVY_REFLECT = os.getenv("DEEPPRESENTER_HEAVY_REFLECT", "").lower() in ("1", "true", "yes")
+HEAVY_REFLECT = os.getenv("HEAVY_REFLECT", "").lower() in ("1", "true", "yes")
 
 RETRY_TIMES = int(os.getenv("RETRY_TIMES", 3))
 TOOL_CUTOFF_LEN = int(os.getenv("TOOL_CUTOFF_LEN", 4096))
 CONTEXT_LENGTH_LIMIT = int(os.getenv("CONTEXT_LENGTH_LIMIT", 200_000))
-INSPECT_CONTENT_MAX_CALLS = int(os.getenv("INSPECT_CONTENT_MAX_CALLS", 3))
+INSPECT_CONTENT_MAX_CALLS = int(os.getenv("INSPECT_CONTENT_MAX_CALLS", 2))
+# inspect_content is a separate LLM call whose findings are rarely worth its latency —
+# off by default; set HEAVY_CONTENT_REVIEW=1 to re-enable it in Research's toolset.
+HEAVY_CONTENT_REVIEW = os.getenv("HEAVY_CONTENT_REVIEW", "").lower() in ("1", "true", "yes")
+
+# Design-agent parallelization (template-based/hynix path only, see design_graph.py's
+# run_design_graph_parallel) — off by default.
+DESIGN_PARALLEL_MODE = os.getenv("DESIGN_PARALLEL_MODE", "").lower() in ("1", "true", "yes")
+DESIGN_PARALLEL_CHUNK_SIZE = int(os.getenv("DESIGN_PARALLEL_CHUNK_SIZE", 3))
+DESIGN_PARALLEL_CONCURRENCY = int(os.getenv("DESIGN_PARALLEL_CONCURRENCY", 4))
+
+# screenshot_slide's max attempts on Chromium/render failure (1 = no retry). Bounded —
+# never set this up via an unconditional "retry forever" loop, since a persistent
+# failure (e.g. resource contention under heavy concurrency) would then never
+# terminate on its own.
+SCREENSHOT_MAX_RETRIES = int(os.getenv("SCREENSHOT_MAX_RETRIES", 5))
 
 WORKSPACE_BASE = Path(
     os.getenv(
