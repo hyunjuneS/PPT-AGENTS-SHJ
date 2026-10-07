@@ -148,6 +148,9 @@ def _save_llm_call_log(workspace: Path, agent_name: str, calls: list[dict]) -> N
                 "total_output_tokens": token_totals["completion"],
                 "total_tokens": token_totals["total"],
                 "total_cached_input_tokens": total_cached_input_tokens,
+                # Headroom tool-output compression (deeppresenter/graph/compression.py) —
+                # chars/4 estimate of input tokens kept off the wire, summed over calls.
+                "total_headroom_est_tokens_saved": sum(c.get("headroom_est_tokens_saved") or 0 for c in calls),
                 "calls": calls,
             },
             f,

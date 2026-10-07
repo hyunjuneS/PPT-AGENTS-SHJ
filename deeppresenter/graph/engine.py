@@ -15,6 +15,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 
+from deeppresenter.graph.compression import compress_for_model
 from deeppresenter.graph.state import GraphState
 from deeppresenter.utils.constants import HALF_BUDGET_NOTICE_MSG, RETRY_TIMES, URGENT_BUDGET_NOTICE_MSG
 from deeppresenter.utils.log import (
@@ -182,6 +183,11 @@ def build_graph(
             messages = [*messages[:-1], warned_last]
             updates.append(warned_last)
 
+        # Headroom tool-output compression — model-facing view only, applied after the
+        # turn-notice above so `updates` (which goes into graph state) is built from the
+        # uncompressed message. See deeppresenter/graph/compression.py.
+        messages, compression_stats = compress_for_model(messages)
+
         show_agent_turn(agent_name, turn_count, max_turns)
 
         def _record_failed_attempt(attempt: int, attempt_elapsed: float, error: str) -> None:
@@ -227,6 +233,7 @@ def build_graph(
             "output_tokens": usage.get("output_tokens") if usage else None,
             "total_tokens": usage.get("total_tokens") if usage else None,
             "cached_input_tokens": input_token_details.get("cache_read"),
+            **compression_stats.as_record(),
             "input": [_dump_message(m) for m in messages],
             "output": _dump_message(response),
         }

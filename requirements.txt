@@ -20,3 +20,8 @@ langchain-core
 langchain-openai
 langgraph
 langfuse
+
+# Headroom — tool-output compression before each LLM call in the LangGraph engine
+# (deeppresenter/graph/compression.py). Optional at runtime: if it fails to import,
+# compression silently turns itself off. Toggle with HEADROOM_COMPRESSION=off.
+headroom-ai
