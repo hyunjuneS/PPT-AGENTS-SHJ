@@ -309,7 +309,7 @@ async def _run_design_worker(
     language: str = "en",
 ) -> _WorkerResult:
     """Runs one independent build_graph().ainvoke() for a single Design worker
-    role (Phase A, cover, a content chunk, or references) — the same
+    role (Phase A, cover, or a content chunk) — the same
     AgentEnv/build_graph/graph.ainvoke() pattern run_design_graph uses for the
     whole deck, just scoped to this worker's own role YAML and render_vars.
     Every worker's tools operate on the shared workspace/slides directory, but
@@ -438,7 +438,7 @@ async def run_design_graph_parallel(
 ) -> DesignGraphResult:
     """Parallel Design-agent orchestration for the template-based/hynix path
     only. Splits the manuscript into a fixed slide manifest — cover, N content
-    chunks, references, end-page — computed here in plain Python, then runs one
+    chunks, end-page — computed here in plain Python, then runs one
     independent worker per manifest entry, concurrency-limited by
     asyncio.Semaphore(DESIGN_PARALLEL_CONCURRENCY). Any worker failure
     (exception, or a missing expected slide_NN.html once all workers finish)
@@ -462,8 +462,7 @@ async def run_design_graph_parallel(
             f"got {page_count}."
         )
 
-    references_slide_no = page_count + 1
-    end_slide_no = page_count + 2
+    end_slide_no = page_count + 1
     total_slides = end_slide_no
 
     show_agent_start("Design-parallel", None)
@@ -532,17 +531,6 @@ async def run_design_graph_parallel(
             "worker_tag": f"chunk_{page}-{chunk_end}",
         })
         page = chunk_end + 1
-
-    worker_specs.append({
-        "role_config_file": PACKAGE_DIR / "roles" / "DesignReferencesWorker-hynix.yaml",
-        "render_vars": {
-            "prompt": req.designagent_prompt,
-            "template_dir": _HYNIX_TEMPLATE_DIR,
-            "slides_dir": str(slides_dir),
-            "ref_slide_no": references_slide_no,
-        },
-        "worker_tag": "references",
-    })
 
     sem = asyncio.Semaphore(DESIGN_PARALLEL_CONCURRENCY)
 

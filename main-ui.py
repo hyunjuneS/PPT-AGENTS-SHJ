@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import sys
@@ -109,30 +108,16 @@ _LANGUAGE: str = os.environ.get("PPT_LANGUAGE", "en")
 _LLM = get_llm()
 
 
-def _make_deep_config(additional_request: str | None):
-    """모든 역할(research/design/long_context/vlm)이 같은 LLM을 쓰는 DeepPresenterConfig.
-    additional_request(JSON)는 sampling_parameters로 병합된다."""
+def _make_deep_config():
+    """모든 역할(research/design/long_context/vlm)이 같은 LLM을 쓰는 DeepPresenterConfig."""
     from deeppresenter.utils.config import DeepPresenterConfig
 
-    llm = get_llm(_parse_additional_request(additional_request))
+    llm = get_llm()
     return DeepPresenterConfig(
         research_agent=llm,
         design_agent=llm,
         long_context_model=llm,
         vlm_agent=llm,
-    )
-
-
-def _title_info_block(file_title: str | None) -> str:
-    """Design 에이전트 instruction에 덧붙여 첫 페이지(커버) 제목 자리를 채우는 지시문.
-    file_title이 주어지면 그 값을 그대로 쓰라고 지시하고, 없으면 아무 지시도 추가하지 않아
-    에이전트가 매뉴스크립트 내용을 보고 스스로 제목을 정하던 기존 동작을 그대로 둔다."""
-    if not file_title:
-        return ""
-    return (
-        "Cover slide (slide_01) title: use exactly this text as the presentation's main title — "
-        "do not invent, translate, shorten, or otherwise modify it:\n"
-        f"{file_title}"
     )
 
 
@@ -150,42 +135,7 @@ def _cover_info_block(presenter_name: str, emp_no: str, team_name: str) -> str:
     )
 
 
-def _split_csv_list(items: list[str]) -> list[str]:
-    """list[str]=Form(...)로 여러 필드를 제대로 보낸 경우와, Swagger UI 등 일부 클라이언트가
-    'a,b' 처럼 한 필드에 콤마로 이어붙여 보내는 경우를 모두 지원하도록 각 원소를 콤마로 추가 분리."""
-    result = []
-    for raw in items:
-        result.extend(part.strip() for part in raw.split(",") if part.strip())
-    return result
-
-
-def _reference_info_block(reference_file_name: list[str]) -> str:
-    """Design 에이전트 instruction에 덧붙여 references 슬라이드(마지막 장 바로 앞에 추가되는 한 장)에
-    표시할 출처 파일명 목록 자리를 채우는 지시문. 실제 값은 항상 여기서 명시적으로 넘기고, 에이전트가
-    sources/ 폴더 등을 스스로 뒤져서 알아내게 하지 않는다."""
-    names = _split_csv_list(reference_file_name)
-    listed = "\n".join(f"  - {n}" for n in names)
-    return (
-        "The deck must include one additional references slide, placed immediately before "
-        "the closing/last slide, listing the source document reference(s) below. Use these "
-        "exact values — do not look them up yourself, derive them from other files, or invent your own:\n"
-        f"{listed}"
-    )
-
-
-def _parse_additional_request(raw: str | None) -> dict:
-    if not raw:
-        return {}
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid additional_request JSON: {e}")
-    if not isinstance(parsed, dict):
-        raise HTTPException(status_code=400, detail="additional_request must be a JSON object")
-    return parsed
-
-
-async def _design_response(result, session_id: str, pptx_stem: str):
+async def _design_response(result, session_id: str):
     """생성된 slide_*.html을 같은 요청 안에서 PPTX로 변환해 그대로 반환한다.
     PPTX와 슬라이드 HTML은 workspace(slides_dir)에 그대로 남는다."""
     from deeppresenter.tools.export import html_slides_to_pptx
@@ -193,7 +143,7 @@ async def _design_response(result, session_id: str, pptx_stem: str):
     slides_dir = result.slides_dir
     html_files = sorted(Path(slides_dir).glob("slide_*.html"))
 
-    pptx_filename = f"{pptx_stem}.pptx"
+    pptx_filename = f"{session_id}.pptx"
     pptx_path = Path(slides_dir) / pptx_filename
     try:
         await html_slides_to_pptx(
@@ -224,9 +174,9 @@ async def _design_response(result, session_id: str, pptx_stem: str):
 # (/template-based-ppt-generation, /template-free-ppt-generation)가 공유한다.
 # ---------------------------------------------------------------------------
 
-async def _run_research_stage(config, workspace, session_id: str, file: UploadFile,
-                               num_pages: int, auto_page: bool):
-    """업로드된 .md → 슬라이드 원고(ResearchGraphResult) 생성."""
+async def _run_research_stage(config, workspace, session_id: str, file: UploadFile):
+    """업로드된 .md → 슬라이드 원고(ResearchGraphResult) 생성. 슬라이드 수는 항상 문서 내용을
+    분석해 자동으로 정한다(decide_num_pages)."""
     from deeppresenter.agents.page_planner import decide_num_pages
     from deeppresenter.graph.research_graph import run_research_graph
     from deeppresenter.utils.typings import InputRequest
@@ -243,10 +193,7 @@ async def _run_research_stage(config, workspace, session_id: str, file: UploadFi
     attachment_path = workspace / Path(file.filename).name
     attachment_path.write_bytes(raw)
 
-    if auto_page:
-        resolved_num_pages = await decide_num_pages(config.long_context_model, content, _RESEARCH_DEFAULT_INSTRUCTION)
-    else:
-        resolved_num_pages = num_pages
+    resolved_num_pages = await decide_num_pages(config.long_context_model, content, _RESEARCH_DEFAULT_INSTRUCTION)
 
     req = InputRequest(
         instruction=_RESEARCH_DEFAULT_INSTRUCTION,
@@ -256,8 +203,8 @@ async def _run_research_stage(config, workspace, session_id: str, file: UploadFi
     )
 
     logger.info(
-        "[Research] session=%s lang=%s auto_page=%s num_pages_input=%d resolved_num_pages=%d",
-        session_id, _LANGUAGE, auto_page, num_pages, resolved_num_pages,
+        "[Research] session=%s lang=%s resolved_num_pages=%d",
+        session_id, _LANGUAGE, resolved_num_pages,
     )
 
     try:
@@ -369,82 +316,48 @@ def app_ready():
     return {"status": "ok"}
 
 
-async def _generate(design_stage, file: UploadFile, num_pages: int, auto_page: bool,
-                    artifact_id: str | None, emp_no: str, presenter_name: str, team_name: str,
-                    file_title: str | None, reference_file_name: list[str],
-                    additional_request: str | None):
+async def _generate(design_stage, file: UploadFile, emp_no: str, presenter_name: str, team_name: str):
     """.md 파일 → Research 에이전트로 원고 생성 → design_stage로 슬라이드 생성 → PPTX 반환."""
     from deeppresenter.utils.constants import WORKSPACE_BASE
 
-    config = _make_deep_config(additional_request)
+    config = _make_deep_config()
 
     session_id = str(uuid.uuid4())[:8]
     set_session_id(session_id)
     workspace = WORKSPACE_BASE / session_id
     workspace.mkdir(parents=True, exist_ok=True)
 
-    research_result = await _run_research_stage(config, workspace, session_id, file, num_pages, auto_page)
-    design_instruction = (
-        f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
-        f"\n\n{_reference_info_block(reference_file_name)}"
-    )
-    if file_title:
-        design_instruction += f"\n\n{_title_info_block(file_title)}"
+    research_result = await _run_research_stage(config, workspace, session_id, file)
+    design_instruction = f"{_DESIGN_DEFAULT_INSTRUCTION}\n\n{_cover_info_block(presenter_name, emp_no, team_name)}"
     design_result = await design_stage(
         config, workspace, session_id, research_result.manuscript_path, design_instruction,
     )
 
-    return await _design_response(design_result, session_id, artifact_id or session_id)
-
-
-_NUM_PAGES_DESC = "총 슬라이드 수 (표지 + 마지막 장 포함, auto_page=false일 때만 사용)"
-_AUTO_PAGE_DESC = "기본값 true. 문서 내용을 분석해 자동으로 슬라이드 수를 결정. false로 지정하면 num_pages 값을 그대로 사용"
-_ARTIFACT_ID_DESC = "생성되는 PPTX 파일명('{artifact_id}.pptx'). 미입력 시 session_id 사용"
-_FILE_TITLE_DESC = "첫 슬라이드(커버) 제목으로 쓸 텍스트. 미입력 시 LLM이 매뉴스크립트 내용을 보고 스스로 제목을 정함"
-_REFERENCE_DESC = "References 슬라이드(마지막 장 바로 앞)에 표시할 출처 파일명 목록 (여러 개 전달 가능)"
-_ADDITIONAL_REQUEST_DESC = 'LLM 요청에 병합할 추가 파라미터, JSON 문자열 (예: {"temperature":0.7,"max_tokens":4096})'
+    return await _design_response(design_result, session_id)
 
 
 @app.post("/template-based-ppt-generation", tags=["main"], summary="Template-Based-PPT-Generation")
 async def template_based_ppt_generation(
     file: UploadFile = File(..., description="원본 문서 (.md, UTF-8)"),
-    num_pages: int = Form(default=10, description=_NUM_PAGES_DESC),
-    auto_page: bool = Form(default=True, description=_AUTO_PAGE_DESC),
-    artifact_id: str | None = Form(default=None, description=_ARTIFACT_ID_DESC),
     emp_no: str = Form(..., description="커버 슬라이드에 표시할 사번"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
-    file_title: str | None = Form(default=None, description=_FILE_TITLE_DESC),
-    reference_file_name: list[str] = Form(..., description=_REFERENCE_DESC),
-    additional_request: str | None = Form(default="{}", description=_ADDITIONAL_REQUEST_DESC),
 ):
     """.md 파일 → Research 에이전트로 원고 생성 → Design(Hynix 템플릿) 에이전트로 슬라이드 생성,
     변환까지 한 요청에서 이어서 처리하고 PPTX를 반환한다."""
-    return await _generate(
-        _run_design_hynix_stage, file, num_pages, auto_page, artifact_id, emp_no,
-        presenter_name, team_name, file_title, reference_file_name, additional_request,
-    )
+    return await _generate(_run_design_hynix_stage, file, emp_no, presenter_name, team_name)
 
 
 @app.post("/template-free-ppt-generation", tags=["main"], summary="Template-Free-PPT-Generation")
 async def template_free_ppt_generation(
     file: UploadFile = File(..., description="원본 문서 (.md, UTF-8)"),
-    num_pages: int = Form(default=10, description=_NUM_PAGES_DESC),
-    auto_page: bool = Form(default=True, description=_AUTO_PAGE_DESC),
-    artifact_id: str | None = Form(default=None, description=_ARTIFACT_ID_DESC),
     emp_no: str = Form(..., description="커버 슬라이드에 표시할 사번"),
     presenter_name: str = Form(..., description="커버 슬라이드에 표시할 이름"),
     team_name: str = Form(..., description="커버 슬라이드에 표시할 팀명"),
-    file_title: str | None = Form(default=None, description=_FILE_TITLE_DESC),
-    reference_file_name: list[str] = Form(..., description=_REFERENCE_DESC),
-    additional_request: str | None = Form(default="{}", description=_ADDITIONAL_REQUEST_DESC),
 ):
     """.md 파일 → Research 에이전트로 원고 생성 → Design(자유 템플릿) 에이전트로 슬라이드 생성,
     변환까지 한 요청에서 이어서 처리하고 PPTX를 반환한다."""
-    return await _generate(
-        _run_design_free_stage, file, num_pages, auto_page, artifact_id, emp_no,
-        presenter_name, team_name, file_title, reference_file_name, additional_request,
-    )
+    return await _generate(_run_design_free_stage, file, emp_no, presenter_name, team_name)
 
 
 # ---------------------------------------------------------------------------

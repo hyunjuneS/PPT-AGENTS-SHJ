@@ -34,8 +34,8 @@ def to_chat_openai(llm: LLM) -> ChatOpenAI:
     # write_file (succeeds) vs. a longer one (fails) on the same model. 16384 is well
     # under GLM-5.3-flash's real ~128K output ceiling, so this is just raising the
     # floor, not asking the model to generate more than it would anyway.
-    # llm.sampling_parameters is spread last so a caller-supplied max_tokens (e.g. via
-    # the API's additional_request param) still overrides this default.
+    # llm.sampling_parameters is spread last so a caller-supplied max_tokens still
+    # overrides this default.
     params = {"max_tokens": 16384, **llm.sampling_parameters}
     return ChatOpenAI(
         model=llm.model,

@@ -56,12 +56,9 @@ class LLM(BaseModel):
     @property
     def _client(self) -> AsyncOpenAI:
         # Built fresh from the CURRENT base_url/api_key on every access rather than cached once at
-        # construction. LLM instances are routinely produced via model_copy(update=...) (e.g.
-        # main-ui.py merging additional_request into sampling_parameters) — model_copy
-        # does NOT re-run model_post_init, so a client cached there at first construction would
-        # keep silently pointing at the pre-copy base_url forever, even though .base_url/.model
-        # correctly report the new values. Constructing AsyncOpenAI is cheap/local (no I/O), so
-        # there's no real cost to not caching it.
+        # construction, so a model_copy(update=...) of this LLM never keeps a stale client
+        # (model_copy does NOT re-run model_post_init). Constructing AsyncOpenAI is cheap/local
+        # (no I/O), so there's no real cost to not caching it.
         return AsyncOpenAI(base_url=self.base_url, api_key=self.api_key)
 
     @property
@@ -120,7 +117,7 @@ DEFAULT_BASE_URL = "http://workplace-litellm.aipp02.skhynix.com/v1"
 DEFAULT_MODEL = "claude-opus-4-5"
 
 
-def get_llm(sampling_parameters: dict[str, Any] | None = None) -> LLM:
+def get_llm() -> LLM:
     """The one model this app uses — every agent (Research, Design, page planner,
     inspect_content, inspect_slide's heavy-reflect review) runs on it.
 
@@ -130,7 +127,6 @@ def get_llm(sampling_parameters: dict[str, Any] | None = None) -> LLM:
         model=os.environ.get("LLM_MODEL") or DEFAULT_MODEL,
         base_url=os.environ.get("LLM_URL") or DEFAULT_BASE_URL,
         api_key=os.environ.get("LLM_API_KEY", ""),
-        sampling_parameters=sampling_parameters or {},
     )
 
 
