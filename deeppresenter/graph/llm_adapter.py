@@ -2,7 +2,7 @@
 loaded the same way from DeepPresenterConfig) into a LangChain ChatOpenAI instance.
 
 Note: this app always talks to its configured model through an OpenAI-compatible
-`base_url` (see .env.example's MODEL_BIG_URL / OPENAI_BASE_URL) even when that
+`base_url` (see .env.example's LLM_URL) even when that
 model is Claude — so ChatOpenAI is the correct wrapper here, not ChatAnthropic.
 """
 

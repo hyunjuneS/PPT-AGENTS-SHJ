@@ -16,7 +16,7 @@ from deeppresenter.utils.constants import (
     SCREENSHOT_MAX_RETRIES,
     TOOL_CUTOFF_LEN,
 )
-from deeppresenter.utils.config import big_llm
+from deeppresenter.utils.config import get_llm
 from deeppresenter.utils.log import debug, warning
 
 _SCREENSHOT_JS = Path(__file__).resolve().parents[1] / "html2pptx" / "screenshot.js"
@@ -544,7 +544,7 @@ async def inspect_content(
         },
     ]
 
-    response = await (llm or big_llm()).run(messages=messages)
+    response = await (llm or get_llm()).run(messages=messages)
     text = response.choices[0].message.content or ""
     parsed = get_json_from_response(text)
     issues = parsed.get("issues") if isinstance(parsed, dict) else None
@@ -599,7 +599,7 @@ async def inspect_slide(
     check via a real browser render (scrollWidth/scrollHeight vs the fixed body
     size — this catches overflow even though `overflow:hidden` clips it invisibly
     in any screenshot). If HEAVY_REFLECT is enabled, the rendered image is also
-    sent as a standalone request to the Big model (vlm_llm, or big_llm() by
+    sent as a standalone request to the LLM (vlm_llm, or get_llm() by
     default) to check for element overlap — the calling agent's own conversation
     never sees the image itself, only that review's text verdict.
     """
@@ -675,7 +675,7 @@ async def inspect_slide(
     # Design 에이전트의 대화에 절대 실리지 않는다 — VLM 요청과 Design 에이전트의 요청은 완전히
     # 분리되어 있으므로, Design 에이전트가 어떤 모델을 쓰든(vision 지원 여부와 무관) 항상 동작한다.
     if HEAVY_REFLECT and img_bytes:
-        llm = vlm_llm or big_llm()
+        llm = vlm_llm or get_llm()
         b64 = base64.b64encode(img_bytes).decode()
         messages = [
             {"role": "system", "content": _VLM_OVERLAP_SYSTEM_PROMPT},

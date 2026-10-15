@@ -163,8 +163,6 @@ async def run_research_graph(
     outline_path: str | Path | None = None,
     config_file: str | Path | None = None,
     language: str = "en",
-    langfuse_handler=None,
-    session_id: str | None = None,
 ) -> ResearchGraphResult:
     workspace.mkdir(parents=True, exist_ok=True)
 
@@ -217,10 +215,6 @@ async def run_research_graph(
         }
 
         run_config: dict = {"recursion_limit": _RECURSION_LIMIT}
-        if langfuse_handler is not None:
-            run_config["callbacks"] = [langfuse_handler]
-            if session_id:
-                run_config["metadata"] = {"langfuse_session_id": session_id}
 
         try:
             final_state = await graph.ainvoke(initial_state, config=run_config)

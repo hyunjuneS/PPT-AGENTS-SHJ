@@ -117,19 +117,19 @@ class LLM(BaseModel):
 
 
 DEFAULT_BASE_URL = "http://workplace-litellm.aipp02.skhynix.com/v1"
-DEFAULT_BIG_MODEL = "claude-opus-4-5"
+DEFAULT_MODEL = "claude-opus-4-5"
 
 
-def big_llm(sampling_parameters: dict[str, Any] | None = None) -> LLM:
+def get_llm(sampling_parameters: dict[str, Any] | None = None) -> LLM:
     """The one model this app uses — every agent (Research, Design, page planner,
     inspect_content, inspect_slide's heavy-reflect review) runs on it.
 
-    MODEL_BIG (default claude-opus-4-5) at MODEL_BIG_URL -> OPENAI_BASE_URL -> the SK hynix
-    gateway, keyed by OPENAI_API_KEY_BIG -> OPENAI_API_KEY."""
+    Configured by exactly three env vars: LLM_MODEL (default claude-opus-4-5),
+    LLM_URL (default the SK hynix LiteLLM gateway) and LLM_API_KEY."""
     return LLM(
-        model=os.environ.get("MODEL_BIG") or DEFAULT_BIG_MODEL,
-        base_url=os.environ.get("MODEL_BIG_URL") or os.environ.get("OPENAI_BASE_URL") or DEFAULT_BASE_URL,
-        api_key=os.environ.get("OPENAI_API_KEY_BIG") or os.environ.get("OPENAI_API_KEY", ""),
+        model=os.environ.get("LLM_MODEL") or DEFAULT_MODEL,
+        base_url=os.environ.get("LLM_URL") or DEFAULT_BASE_URL,
+        api_key=os.environ.get("LLM_API_KEY", ""),
         sampling_parameters=sampling_parameters or {},
     )
 

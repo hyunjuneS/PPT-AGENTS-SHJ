@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
-from deeppresenter.utils.config import big_llm
+from deeppresenter.utils.config import get_llm
 from deeppresenter.utils.constants import WORKSPACE_BASE
 from deeppresenter.utils.log import SessionIdFilter, set_session_id
 
@@ -78,7 +78,7 @@ async def add_process_time_header(request: Request, call_next):
     return response
 
 # ---------------------------------------------------------------------------
-# LLM — Big 모델 하나만 사용 (.env의 MODEL_BIG / MODEL_BIG_URL / OPENAI_API_KEY_BIG).
+# LLM — 모델 하나만 사용 (.env의 LLM_MODEL / LLM_URL / LLM_API_KEY).
 # Research, Design, 페이지 수 결정, heavy-reflect 시각 검토까지 전부 같은 모델이다.
 # ---------------------------------------------------------------------------
 
@@ -89,16 +89,16 @@ _DESIGN_DEFAULT_INSTRUCTION = "Create a professional presentation."
 # PPT_LANGUAGE env — 출력 언어 고정. 값: "en" (기본) 또는 "ko".
 _LANGUAGE: str = os.environ.get("PPT_LANGUAGE", "en")
 
-_BIG_LLM = big_llm()
-logger.info("LLM configured: model=%s base_url=%s language=%s", _BIG_LLM.model, _BIG_LLM.base_url, _LANGUAGE)
+_LLM = get_llm()
+logger.info("LLM configured: model=%s base_url=%s language=%s", _LLM.model, _LLM.base_url, _LANGUAGE)
 
 
 def _make_deep_config(additional_request: str | None):
-    """모든 역할(research/design/long_context/vlm)이 Big 모델을 쓰는 DeepPresenterConfig.
+    """모든 역할(research/design/long_context/vlm)이 같은 LLM을 쓰는 DeepPresenterConfig.
     additional_request(JSON)는 sampling_parameters로 병합된다."""
     from deeppresenter.utils.config import DeepPresenterConfig
 
-    llm = big_llm(_parse_additional_request(additional_request))
+    llm = get_llm(_parse_additional_request(additional_request))
     return DeepPresenterConfig(
         research_agent=llm,
         design_agent=llm,
@@ -212,7 +212,6 @@ async def _run_research_stage(config, workspace, session_id: str, file: UploadFi
                                num_pages: int, auto_page: bool):
     """업로드된 .md → 슬라이드 원고(ResearchGraphResult) 생성."""
     from deeppresenter.agents.page_planner import decide_num_pages
-    from deeppresenter.graph.callbacks import get_langfuse_handler
     from deeppresenter.graph.research_graph import run_research_graph
     from deeppresenter.utils.typings import InputRequest
 
@@ -251,8 +250,6 @@ async def _run_research_stage(config, workspace, session_id: str, file: UploadFi
             workspace=workspace,
             req=req,
             language=_LANGUAGE,
-            langfuse_handler=get_langfuse_handler(session_id),
-            session_id=session_id,
         )
     except Exception as e:
         logger.error("[Research] failed: %s", e)
@@ -271,7 +268,6 @@ async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_f
     직렬 경로(run_design_graph)로 폴백한다. DESIGN_CONFIG_FILE이 design-hynix.yaml 자체를 가리키는
     (일반적인) 경우는 병렬 모드 대상이다. template-free 경로(_run_design_free_stage)는 이 분기와
     무관하게 항상 직렬로만 동작한다."""
-    from deeppresenter.graph.callbacks import get_langfuse_handler
     from deeppresenter.graph.design_graph import run_design_graph, run_design_graph_parallel
     from deeppresenter.utils.constants import DESIGN_PARALLEL_MODE, PACKAGE_DIR
     from deeppresenter.utils.typings import InputRequest
@@ -301,8 +297,6 @@ async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_f
                 req=req,
                 markdown_file=markdown_file,
                 language=_LANGUAGE,
-                langfuse_handler=get_langfuse_handler(session_id),
-                session_id=session_id,
             )
         return await run_design_graph(
             config=config,
@@ -312,8 +306,6 @@ async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_f
             template_content=template_content,
             config_file=config_file,
             language=_LANGUAGE,
-            langfuse_handler=get_langfuse_handler(session_id),
-            session_id=session_id,
         )
     except Exception as e:
         logger.error("[DesignHynixTemplate] failed: %s", e)
@@ -322,7 +314,6 @@ async def _run_design_hynix_stage(config, workspace, session_id: str, markdown_f
 
 async def _run_design_free_stage(config, workspace, session_id: str, markdown_file: str, instruction: str):
     """원고(.md) → Design 에이전트(자유 템플릿)로 HTML 슬라이드 생성."""
-    from deeppresenter.graph.callbacks import get_langfuse_handler
     from deeppresenter.graph.design_graph import run_design_graph
     from deeppresenter.utils.constants import PACKAGE_DIR
     from deeppresenter.utils.typings import InputRequest
@@ -342,8 +333,6 @@ async def _run_design_free_stage(config, workspace, session_id: str, markdown_fi
             markdown_file=markdown_file,
             config_file=config_file,
             language=_LANGUAGE,
-            langfuse_handler=get_langfuse_handler(session_id),
-            session_id=session_id,
         )
     except Exception as e:
         logger.error("[DesignFreeTemplate] failed: %s", e)
@@ -356,7 +345,7 @@ async def _run_design_free_stage(config, workspace, session_id: str, markdown_fi
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "model": _BIG_LLM.model}
+    return {"status": "ok", "model": _LLM.model}
 
 
 @app.get("/api/admin/appReady")
@@ -448,8 +437,8 @@ async def template_free_ppt_generation(
 
 if __name__ == "__main__":
     # 필수 환경변수 검증
-    if not (os.environ.get("OPENAI_API_KEY_BIG") or os.environ.get("OPENAI_API_KEY")):
-        print("error: OPENAI_API_KEY is required (set in .env or environment)", file=sys.stderr)
+    if not os.environ.get("LLM_API_KEY"):
+        print("error: LLM_API_KEY is required (set in .env or environment)", file=sys.stderr)
         sys.exit(1)
 
     # 경로 검증

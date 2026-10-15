@@ -175,8 +175,6 @@ async def run_design_graph(
     template_content: str = "",
     config_file: str | Path | None = None,
     language: str = "en",
-    langfuse_handler=None,
-    session_id: str | None = None,
 ) -> DesignGraphResult:
     workspace.mkdir(parents=True, exist_ok=True)
     (workspace / "slides").mkdir(exist_ok=True)
@@ -195,7 +193,7 @@ async def run_design_graph(
     llm = config[role_config.use_model]
     chat_model = to_chat_openai(llm)
 
-    # HEAVY_REFLECT일 때만 vlm_agent(=Big 모델)를 inspect_slide에 바인딩한다 — Design 에이전트
+    # HEAVY_REFLECT일 때만 vlm_agent(=LLM_MODEL)를 inspect_slide에 바인딩한다 — Design 에이전트
     # 자신의 대화는 이미지를 받지 않고, 별도 요청으로 받은 텍스트 겹침 리뷰만 전달받는다.
     vlm_llm = config.vlm_agent if HEAVY_REFLECT else None
 
@@ -238,10 +236,6 @@ async def run_design_graph(
         }
 
         run_config: dict = {"recursion_limit": _RECURSION_LIMIT}
-        if langfuse_handler is not None:
-            run_config["callbacks"] = [langfuse_handler]
-            if session_id:
-                run_config["metadata"] = {"langfuse_session_id": session_id}
 
         try:
             final_state = await graph.ainvoke(initial_state, config=run_config)
@@ -313,8 +307,6 @@ async def _run_design_worker(
     finalize_agent_name: str,
     worker_tag: str,
     language: str = "en",
-    langfuse_handler=None,
-    session_id: str | None = None,
 ) -> _WorkerResult:
     """Runs one independent build_graph().ainvoke() for a single Design worker
     role (Phase A, cover, a content chunk, or references) — the same
@@ -363,10 +355,6 @@ async def _run_design_worker(
         }
 
         run_config: dict = {"recursion_limit": _RECURSION_LIMIT}
-        if langfuse_handler is not None:
-            run_config["callbacks"] = [langfuse_handler]
-            if session_id:
-                run_config["metadata"] = {"langfuse_session_id": session_id}
 
         try:
             final_state = await graph.ainvoke(initial_state, config=run_config)
@@ -409,8 +397,6 @@ async def run_design_plan_phase(
     markdown_file: str,
     page_count: int,
     language: str = "en",
-    langfuse_handler=None,
-    session_id: str | None = None,
 ) -> _WorkerResult:
     """Phase A of parallel Design: decides the deck's shared slide-master style
     (slides/global.css) AND, since it's the only worker that sees the whole
@@ -440,8 +426,6 @@ async def run_design_plan_phase(
         finalize_agent_name="DesignPlan",
         worker_tag="plan",
         language=language,
-        langfuse_handler=langfuse_handler,
-        session_id=session_id,
     )
 
 
@@ -451,8 +435,6 @@ async def run_design_graph_parallel(
     req: InputRequest,
     markdown_file: str,
     language: str = "en",
-    langfuse_handler=None,
-    session_id: str | None = None,
 ) -> DesignGraphResult:
     """Parallel Design-agent orchestration for the template-based/hynix path
     only. Splits the manuscript into a fixed slide manifest — cover, N content
@@ -488,7 +470,7 @@ async def run_design_graph_parallel(
 
     plan_result = await run_design_plan_phase(
         config, workspace, req, markdown_file, page_count,
-        language=language, langfuse_handler=langfuse_handler, session_id=session_id,
+        language=language,
     )
 
     # global.css and template_manifest.json are both read directly by each worker
@@ -573,8 +555,6 @@ async def run_design_graph_parallel(
                 finalize_agent_name="Design",
                 worker_tag=spec["worker_tag"],
                 language=language,
-                langfuse_handler=langfuse_handler,
-                session_id=session_id,
             )
 
     results = await asyncio.gather(*(_run_guarded(s) for s in worker_specs), return_exceptions=True)
