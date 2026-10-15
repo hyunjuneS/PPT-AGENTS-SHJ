@@ -1,8 +1,6 @@
 import asyncio
 import json
-import re
-from itertools import cycle
-from pathlib import Path
+import os
 from typing import Any
 
 import json_repair
@@ -11,7 +9,7 @@ from openai.types.chat import ChatCompletion
 from pydantic import BaseModel, Field
 
 from deeppresenter.utils.constants import RETRY_TIMES
-from deeppresenter.utils.log import debug, logging_openai_exceptions
+from deeppresenter.utils.log import logging_openai_exceptions
 
 
 def get_json_from_response(response: str) -> dict | list:
@@ -59,7 +57,7 @@ class LLM(BaseModel):
     def _client(self) -> AsyncOpenAI:
         # Built fresh from the CURRENT base_url/api_key on every access rather than cached once at
         # construction. LLM instances are routinely produced via model_copy(update=...) (e.g.
-        # main-ui.py's _resolve_tiered_llm, overriding base_url/model per request) — model_copy
+        # main-ui.py merging additional_request into sampling_parameters) — model_copy
         # does NOT re-run model_post_init, so a client cached there at first construction would
         # keep silently pointing at the pre-copy base_url forever, even though .base_url/.model
         # correctly report the new values. Constructing AsyncOpenAI is cheap/local (no I/O), so
@@ -116,6 +114,24 @@ class LLM(BaseModel):
                     await asyncio.sleep(min(2 ** attempt, 30))
 
         raise ValueError(f"All {retry_times} retries failed:\n" + "\n".join(errors))
+
+
+DEFAULT_BASE_URL = "http://workplace-litellm.aipp02.skhynix.com/v1"
+DEFAULT_BIG_MODEL = "claude-opus-4-5"
+
+
+def big_llm(sampling_parameters: dict[str, Any] | None = None) -> LLM:
+    """The one model this app uses — every agent (Research, Design, page planner,
+    inspect_content, inspect_slide's heavy-reflect review) runs on it.
+
+    MODEL_BIG (default claude-opus-4-5) at MODEL_BIG_URL -> OPENAI_BASE_URL -> the SK hynix
+    gateway, keyed by OPENAI_API_KEY_BIG -> OPENAI_API_KEY."""
+    return LLM(
+        model=os.environ.get("MODEL_BIG") or DEFAULT_BIG_MODEL,
+        base_url=os.environ.get("MODEL_BIG_URL") or os.environ.get("OPENAI_BASE_URL") or DEFAULT_BASE_URL,
+        api_key=os.environ.get("OPENAI_API_KEY_BIG") or os.environ.get("OPENAI_API_KEY", ""),
+        sampling_parameters=sampling_parameters or {},
+    )
 
 
 class DeepPresenterConfig(BaseModel):

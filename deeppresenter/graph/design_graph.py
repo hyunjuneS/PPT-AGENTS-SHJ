@@ -186,9 +186,7 @@ async def run_design_graph(
     if "template_dir" in role_config.instruction:
         # cover-page.html(등 하이닉스 템플릿)이 배경 이미지 등에서 상대경로로 참조할 수 있도록,
         # 슬라이드가 실제로 저장되는 slides/ 안에도 로고/라벨 이미지를 넣어준다 — 원본 template_dir 기준
-        # 상대경로는 slides/에 복사된 slide_01.html 입장에선 해석되지 않는다. main-ui.py의 MinIO
-        # 업로드(htmls/combined_html)는 slides/ 안의 이미지 파일을 확장자로 스캔해서 통째로 올리므로,
-        # 여기 복사되는 것만으로 그쪽도 자동으로 같이 업로드된다.
+        # 상대경로는 slides/에 복사된 slide_01.html 입장에선 해석되지 않는다.
         for asset_name in _HYNIX_TEMPLATE_ASSETS:
             asset_src = Path(_HYNIX_TEMPLATE_DIR) / asset_name
             if asset_src.exists():
@@ -197,8 +195,8 @@ async def run_design_graph(
     llm = config[role_config.use_model]
     chat_model = to_chat_openai(llm)
 
-    # HEAVY_REFLECT일 때만 별도 VLM 모델을 inspect_slide에 바인딩한다 — Design 에이전트 자신의
-    # chat_model(llm, 위)은 이미지를 받지 않고, VLM이 돌려준 텍스트 겹침 리뷰만 전달받는다.
+    # HEAVY_REFLECT일 때만 vlm_agent(=Big 모델)를 inspect_slide에 바인딩한다 — Design 에이전트
+    # 자신의 대화는 이미지를 받지 않고, 별도 요청으로 받은 텍스트 겹침 리뷰만 전달받는다.
     vlm_llm = config.vlm_agent if HEAVY_REFLECT else None
 
     async with AgentEnv(workspace) as env:

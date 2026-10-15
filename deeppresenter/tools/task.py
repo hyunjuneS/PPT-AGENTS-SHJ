@@ -7,7 +7,6 @@ import math
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 
@@ -17,6 +16,7 @@ from deeppresenter.utils.constants import (
     SCREENSHOT_MAX_RETRIES,
     TOOL_CUTOFF_LEN,
 )
+from deeppresenter.utils.config import big_llm
 from deeppresenter.utils.log import debug, warning
 
 _SCREENSHOT_JS = Path(__file__).resolve().parents[1] / "html2pptx" / "screenshot.js"
@@ -35,16 +35,11 @@ def _get_chromium_executable() -> str | None:
 
 
 async def screenshot_slide(
-    html_file: str, aspect_ratio: str = "16:9", image_format: str = "jpeg", _attempt: int = 1
+    html_file: str, aspect_ratio: str = "16:9", _attempt: int = 1
 ) -> tuple[bytes | None, dict | None]:
     """HTML 슬라이드를 Playwright로 렌더링.
     (이미지 bytes, body 치수 dict{width,height,scrollWidth,scrollHeight}) 반환.
-    실패 시 (None, None). image_format은 "jpeg"(기본, VLM 검토용) 또는 "png"
-    (main-ui.py의 슬라이드 PNG 갤러리 업로드용) — screenshot.js가 출력 파일 확장자로 판단한다.
-
-    inspect_slide(VLM 겹침 검토)와 main-ui.py의 PNG 스크린샷 업로드가 공유하는 렌더링 로직 —
-    두 곳 모두 여기 하나만 거쳐가므로 차트 placeholder 시각화, 한글 폰트 폴백 등 렌더링 방식이
-    항상 동일하게 유지된다.
+    실패 시 (None, None). 이미지는 JPEG — inspect_slide의 heavy-reflect 겹침 검토용.
 
     동시 요청으로 여러 Chromium이 한꺼번에 뜨는 순간의 자원 경합 때문에 launch가
     간헐적으로 죽는 경우가 있어, 실패 시 최대 SCREENSHOT_MAX_RETRIES번까지 재시도한다 —
@@ -61,8 +56,7 @@ async def screenshot_slide(
     }
     w, h = SIZES.get(aspect_ratio, (1280, 720))
 
-    suffix = ".png" if image_format == "png" else ".jpg"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
         output = f.name
 
     try:
@@ -115,7 +109,7 @@ async def screenshot_slide(
 
     if _attempt < SCREENSHOT_MAX_RETRIES:
         warning(f"Retrying screenshot_slide (attempt {_attempt + 1}/{SCREENSHOT_MAX_RETRIES}) after failure")
-        return await screenshot_slide(html_file, aspect_ratio, image_format, _attempt=_attempt + 1)
+        return await screenshot_slide(html_file, aspect_ratio, _attempt=_attempt + 1)
 
     warning(f"screenshot_slide gave up after {_attempt} attempt(s)")
     return None, None
@@ -438,13 +432,6 @@ INSPECT_MANUSCRIPT_SPEC = {
 
 # ── inspect_content ───────────────────────────────────────────────────────────
 
-# Fallback only — used if this tool is ever invoked without an `llm` bound to it
-# (e.g. the old engine, deeppresenter/agents/, which doesn't support bound tool
-# kwargs). The graph engine always binds the role's own resolved LLM instead
-# (see build_tools_for_role in deeppresenter/graph/tools.py), so this path uses
-# the exact same model/base_url/api_key the research agent itself is using.
-_FALLBACK_BASE_URL = "http://workplace-litellm.aipp02.skhynix.com/v1"
-
 _MAX_REVIEW_CHARS = 60_000  # cap manuscript+sources sent for this review call only
 
 _CONTENT_REVIEW_SYSTEM_PROMPT = """You are a meticulous editor reviewing a presentation manuscript
@@ -469,28 +456,7 @@ _CONTENT_REVIEW_USER_TEMPLATE = """<manuscript>
 Respond with STRICT JSON ONLY, exactly in this shape: {{"issues": ["..."]}} (empty list if none)."""
 
 
-def _default_llm():
-    from deeppresenter.utils.config import LLM
-    return LLM(
-        model=os.environ.get("MODEL_BIG", "claude-opus-4-5"),
-        base_url=os.environ.get("OPENAI_BASE_URL") or _FALLBACK_BASE_URL,
-        api_key=os.environ.get("OPENAI_API_KEY", ""),
-    )
-
-
-# ── inspect_slide's VLM overlap review ──────────────────────────────────────
-
-# Fallback only — used if inspect_slide is ever invoked without a `vlm_llm` bound
-# to it. The graph engine always binds config.vlm_agent (VLM_MODEL_NAME/VLM_MODEL_URL)
-# instead (see build_tools_for_role in deeppresenter/graph/tools.py).
-def _default_vlm_llm():
-    from deeppresenter.utils.config import LLM
-    return LLM(
-        model=os.environ.get("VLM_MODEL_NAME", ""),
-        base_url=os.environ.get("VLM_MODEL_URL") or os.environ.get("OPENAI_BASE_URL") or _FALLBACK_BASE_URL,
-        api_key=os.environ.get("VLM_API_KEY") or os.environ.get("OPENAI_API_KEY", ""),
-    )
-
+# ── inspect_slide's heavy-reflect overlap review ────────────────────────────
 
 _VLM_OVERLAP_SYSTEM_PROMPT = (
     "You are a meticulous visual QA reviewer for presentation slides. You will be shown a "
@@ -578,7 +544,7 @@ async def inspect_content(
         },
     ]
 
-    response = await (llm or _default_llm()).run(messages=messages)
+    response = await (llm or big_llm()).run(messages=messages)
     text = response.choices[0].message.content or ""
     parsed = get_json_from_response(text)
     issues = parsed.get("issues") if isinstance(parsed, dict) else None
@@ -633,9 +599,9 @@ async def inspect_slide(
     check via a real browser render (scrollWidth/scrollHeight vs the fixed body
     size — this catches overflow even though `overflow:hidden` clips it invisibly
     in any screenshot). If HEAVY_REFLECT is enabled, the rendered image is also
-    sent as a standalone request to a dedicated VLM (vlm_llm, or VLM_MODEL_NAME by
-    default) to check for element overlap — the calling agent's own model never
-    sees the image itself, only the VLM's text verdict.
+    sent as a standalone request to the Big model (vlm_llm, or big_llm() by
+    default) to check for element overlap — the calling agent's own conversation
+    never sees the image itself, only that review's text verdict.
     """
     path = Path(html_file)
     assert path.exists() and path.suffix == ".html", \
@@ -709,7 +675,7 @@ async def inspect_slide(
     # Design 에이전트의 대화에 절대 실리지 않는다 — VLM 요청과 Design 에이전트의 요청은 완전히
     # 분리되어 있으므로, Design 에이전트가 어떤 모델을 쓰든(vision 지원 여부와 무관) 항상 동작한다.
     if HEAVY_REFLECT and img_bytes:
-        llm = vlm_llm or _default_vlm_llm()
+        llm = vlm_llm or big_llm()
         b64 = base64.b64encode(img_bytes).decode()
         messages = [
             {"role": "system", "content": _VLM_OVERLAP_SYSTEM_PROMPT},
