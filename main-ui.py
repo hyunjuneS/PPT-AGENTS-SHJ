@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -53,8 +54,10 @@ if not any(
     _log_file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
     logging.root.addHandler(_log_file_handler)
 
+# 이 파일은 한 프로세스 안에서 여러 번 import될 수 있으므로(아래 lifespan 주석 참고) 이미 붙어 있으면 다시 붙이지 않는다.
 for _handler in logging.root.handlers:
-    _handler.addFilter(SessionIdFilter())
+    if not any(isinstance(f, SessionIdFilter) for f in _handler.filters):
+        _handler.addFilter(SessionIdFilter())
 logger = logging.getLogger(__name__)
 
 # openai SDK가 내부적으로 쓰는 httpx의 요청/응답 로그를 켜둔다.
@@ -64,7 +67,19 @@ logger = logging.getLogger(__name__)
 # 실제 상태 코드가 같이 찍혀서 원인을 바로 확인할 수 있다.
 logging.getLogger("httpx").setLevel(logging.INFO)
 
-app = FastAPI(title="PPT Agent API", version="0.2.0")
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """시작 로그는 import 시점이 아니라 여기서 한 번만 찍는다.
+
+    `python main-ui.py` 실행 시 이 파일의 top-level 코드는 __main__(reloader 부모 프로세스),
+    __mp_main__(reload 워커가 spawn될 때 메인 스크립트를 다시 실행), main-ui(uvicorn이 앱을
+    import)로 최대 세 번 실행된다. lifespan은 실제로 요청을 받는 앱에서만 한 번 실행된다."""
+    logger.info("LLM configured: model=%s base_url=%s language=%s", _LLM.model, _LLM.base_url, _LANGUAGE)
+    yield
+
+
+app = FastAPI(title="PPT Agent API", version="0.2.0", lifespan=_lifespan)
 
 
 @app.middleware("http")
@@ -74,7 +89,9 @@ async def add_process_time_header(request: Request, call_next):
     response = await call_next(request)
     elapsed = time.perf_counter() - start
     response.headers["X-Process-Time"] = f"{elapsed:.3f}"
-    logger.info("[Timing] %s %s took %.3fs", request.method, request.url.path, elapsed)
+    # uvicorn 자체 access log는 꺼두고(uvicorn.run의 access_log=False) 이 한 줄로 대신한다 —
+    # 둘 다 켜 두면 요청마다 같은 내용이 두 번 찍힌다. 이쪽은 session_id가 붙고 server.log에도 남는다.
+    logger.info("[Request] %s %s -> %d (%.3fs)", request.method, request.url.path, response.status_code, elapsed)
     return response
 
 # ---------------------------------------------------------------------------
@@ -90,7 +107,6 @@ _DESIGN_DEFAULT_INSTRUCTION = "Create a professional presentation."
 _LANGUAGE: str = os.environ.get("PPT_LANGUAGE", "en")
 
 _LLM = get_llm()
-logger.info("LLM configured: model=%s base_url=%s language=%s", _LLM.model, _LLM.base_url, _LANGUAGE)
 
 
 def _make_deep_config(additional_request: str | None):
@@ -461,4 +477,5 @@ if __name__ == "__main__":
         port=port,
         reload=reload,
         log_level=log_level,
+        access_log=False,
     )
