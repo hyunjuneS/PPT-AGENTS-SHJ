@@ -16,7 +16,7 @@ from deeppresenter.utils.config import get_llm
 from deeppresenter.utils.constants import WORKSPACE_BASE
 from deeppresenter.utils.log import SessionIdFilter, set_session_id
 
-# .env 파일을 os.environ 에 주입. reload worker 재import 시에도 동일하게 적용된다.
+# .env 파일을 os.environ 에 주입.
 load_dotenv()
 
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s session_id=%(session_id)s: %(message)s"
@@ -37,12 +37,8 @@ logging.basicConfig(
 # 콘솔(stdout)에 찍히는 것과 같은 내용을 그대로 파일에도 남긴다 — turn/tool_call/tool_result 등
 # deeppresenter.utils.log를 거치는 모든 진행 로그가 여기 포함된다(재시작해도 이어쓰기).
 # WORKSPACE_BASE(기본: deeppresenter/output/YYYYMMDD)에 날짜별로 쌓인다.
-#
-# 중복 부착 방지: __main__ 실행 시 아래 uvicorn.run("main-ui:app", ...)이 문자열 앱 경로를
-# 쓰는데(reload=True에 필수), 이 때문에 uvicorn이 "main-ui"를 __main__과는 별개의 모듈로
-# 다시 import해서 이 파일의 top-level 코드(바로 이 블록 포함)가 같은 프로세스 안에서 두 번
-# 실행된다. logging.basicConfig()는 자체적으로 중복 방지가 되지만 addHandler는 그렇지 않아서,
-# 가드 없이는 같은 파일을 가리키는 FileHandler가 두 번 붙어 모든 로그 줄이 두 번씩 찍힌다.
+# 이미 같은 파일 핸들러가 붙어 있으면(예: 테스트에서 모듈을 다시 import) 또 붙이지 않는다 —
+# 붙이면 모든 로그 줄이 두 번씩 찍힌다.
 _log_file_path = str((WORKSPACE_BASE / "server.log").resolve())
 if not any(
     isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == _log_file_path
@@ -53,7 +49,7 @@ if not any(
     _log_file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
     logging.root.addHandler(_log_file_handler)
 
-# 이 파일은 한 프로세스 안에서 여러 번 import될 수 있으므로(아래 lifespan 주석 참고) 이미 붙어 있으면 다시 붙이지 않는다.
+# 같은 이유로, 이미 붙어 있으면 다시 붙이지 않는다.
 for _handler in logging.root.handlers:
     if not any(isinstance(f, SessionIdFilter) for f in _handler.filters):
         _handler.addFilter(SessionIdFilter())
@@ -69,11 +65,7 @@ logging.getLogger("httpx").setLevel(logging.INFO)
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
-    """시작 로그는 import 시점이 아니라 여기서 한 번만 찍는다.
-
-    `python main-ui.py` 실행 시 이 파일의 top-level 코드는 __main__(reloader 부모 프로세스),
-    __mp_main__(reload 워커가 spawn될 때 메인 스크립트를 다시 실행), main-ui(uvicorn이 앱을
-    import)로 최대 세 번 실행된다. lifespan은 실제로 요청을 받는 앱에서만 한 번 실행된다."""
+    """서버가 요청을 받기 시작할 때 한 번 찍는 시작 로그."""
     logger.info("LLM configured: model=%s base_url=%s language=%s", _LLM.model, _LLM.base_url, _LANGUAGE)
     yield
 
@@ -379,16 +371,15 @@ if __name__ == "__main__":
 
     host      = os.environ.get("HOST", "0.0.0.0")
     port      = int(os.environ.get("PORT", "5000"))
-    reload    = os.environ.get("RELOAD", "true").lower() not in ("0", "false", "no")
     log_level = os.environ.get("LOG_LEVEL", "info")
 
-    logger.info("Server: host=%s port=%d reload=%s log_level=%s", host, port, reload, log_level)
+    logger.info("Server: host=%s port=%d log_level=%s", host, port, log_level)
 
+    # 리로드는 쓰지 않는다. 앱 객체를 직접 넘기므로 uvicorn이 이 파일을 다시 import하지 않는다.
     uvicorn.run(
-        "main-ui:app",
+        app,
         host=host,
         port=port,
-        reload=reload,
         log_level=log_level,
         access_log=False,
     )
