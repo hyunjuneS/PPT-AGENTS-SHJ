@@ -15,3 +15,7 @@ Pillow
 langchain-core
 langchain-openai
 langgraph
+
+# Headroom — tool-output compression before each LLM call (deeppresenter/graph/compression.py).
+# Only used when HEADROOM_ENABLED=true; if it fails to import, compression turns itself off.
+headroom-ai

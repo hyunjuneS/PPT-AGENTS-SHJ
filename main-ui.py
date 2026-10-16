@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import sys
@@ -67,6 +68,14 @@ logging.getLogger("httpx").setLevel(logging.INFO)
 async def _lifespan(_app: FastAPI):
     """서버가 요청을 받기 시작할 때 한 번 찍는 시작 로그."""
     logger.info("LLM configured: model=%s base_url=%s language=%s", _LLM.model, _LLM.base_url, _LANGUAGE)
+
+    from deeppresenter.graph import compression
+
+    if compression.HEADROOM_ENABLED:
+        ok = await asyncio.to_thread(compression.warm_up)
+        logger.info("Headroom compression: %s", "on" if ok else "unavailable (headroom-ai import failed)")
+    else:
+        logger.info("Headroom compression: off")
     yield
 
 
