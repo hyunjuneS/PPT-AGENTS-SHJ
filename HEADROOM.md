@@ -92,3 +92,24 @@ API 키는 앱이 보낸 그대로 게이트웨이에 전달된다. 프록시에
 
 - 라이브러리 모드: `HEADROOM_ENABLED=false` (기본값)
 - 프록시 모드: `LLM_URL`을 원래 게이트웨이 주소로 되돌리고 프록시를 끈다.
+
+## Kompress 단독 테스트 (AI 기반 텍스트 압축)
+
+Kompress는 문장에서 덜 중요해 보이는 단어를 AI 모델이 골라 지우는 손실 압축이다. 앱에는 아직 붙어 있지 않고,
+`test/kompress_test.py`로 원고만 따로 압축해 보며 효과와 손실을 확인할 수 있다.
+
+```bash
+python test/kompress_test.py 원고.md                  # 결과: test/kompress_output/
+python test/kompress_test.py 원고.md --target-ratio 0.5
+```
+
+모델 파일이 필요하다. 사내망에서는 인터넷 되는 PC에서 받아 HuggingFace 캐시 폴더를 복사한다 (버전 고정):
+
+```bash
+huggingface-cli download chopratejas/kompress-v2-base --revision b1563631b35bfdcee37587ad530147497d820d4c
+huggingface-cli download answerdotai/ModernBERT-base --revision 8949b909ec900327062f0ebf497f51aef5e6f0c8
+```
+
+모델이 없으면 Headroom은 에러 없이 원문을 그대로 돌려준다. 스크립트는 이를 막기 위해 모델부터 확인하고, 없으면 받는 방법을 출력하고 멈춘다.
+
+주의: 모델 파일이 생기면 `headroom-proxy.sh`의 프록시도 Kompress를 자동으로 켠다. 그 전에 `--protect-tool-results read_file`을 추가해 템플릿·원고 읽기 결과가 손실 압축되지 않게 한다.

@@ -14,3 +14,4 @@ fonts/
 deeppresenter/roles/templates/hynix/*.html
 deeppresenter/roles/templates/hynix/index.txt
 deeppresenter/roles/other/
+test/kompress_output/
